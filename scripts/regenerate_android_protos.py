@@ -20,11 +20,11 @@ from collections.abc import Iterable
 from pathlib import Path, PurePath
 
 EXPECTED_DISTRIBUTIONS = {
-    "grpcio": "1.76.0",
-    "grpcio-tools": "1.76.0",
-    "protobuf": "6.33.5",
+    "grpcio": "1.84.0",
+    "grpcio-tools": "1.84.0",
+    "protobuf": "7.36.2",
 }
-EXPECTED_PROTOC = "libprotoc 31.1"
+EXPECTED_PROTOC = "libprotoc 35.1"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPO_ROOT / "src" / "notebooklm" / "_android" / "proto_src"

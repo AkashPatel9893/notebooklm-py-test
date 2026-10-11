@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 # Upper bounds protect downstream installs from a breaking new major
@@ -55,14 +56,13 @@ impersonate = ["curl_cffi>=0.11,<1"]
 headless = ["gpsoauth>=1.1.0"]
 # Android bearer-gRPC runtime. The protobuf runtime is pinned to the patched
 # 6.x release compatible with the checked-in Android generated stubs.
-android = ["grpcio==1.76.0", "protobuf==6.33.5", "gpsoauth>=1.1.0"]
+android = ["grpcio==1.84.0", "protobuf==7.36.2", "gpsoauth>=1.1.0"]
 # >=3.0: the remote-transport bearer auth (FastMCP(auth=...) + TokenVerifier)
 # landed in fastmcp 3.0; 2.x lacks it and would ImportError in mcp/_auth.py.
-# Pinned ==3.4.2: fastmcp 3.4.3 broke the RFC 9728 protected-resource-metadata
-# route (/.well-known/oauth-protected-resource/mcp → 404), which dead-ends
-# claude.ai's remote-connector OAuth discovery ("Couldn't connect to the
-# server"). 3.4.2 is the last-good; lift the pin once a fixed release ships.
-mcp = ["fastmcp==3.4.2"]
+# Pinned ==4.1.0: fastmcp 3.x pulls beartype 0.22.x, which imports
+# typing.no_type_check_decorator (removed in Python 3.15), so ``import fastmcp``
+# fails on 3.15. 4.x resolves beartype to a 3.15-compatible release.
+mcp = ["fastmcp==4.1.0"]
 # Optional single-tenant REST server (the third _app adapter, after cli/ and
 # mcp/). EXPERIMENTAL: the /v1 surface may change in a minor release; it is
 # excluded from the public-API compatibility gate. python-multipart is REQUIRED
@@ -89,11 +89,12 @@ dev = [
     "tomli>=2.0.0,<3; python_version < '3.11'",  # for tests/unit/test_install_docs.py on Python 3.10 (tomllib is 3.11+)
     "vcrpy>=6.0.0,<9",
     "packaging>=23.0,<27",  # for tests/unit/test_version_gate.py (PEP 440 version parsing)
-    # Deterministic Android protobuf toolchain: grpcio-tools 1.76.0 embeds
-    # libprotoc 31.1; the generated code accepts the patched 6.33.5 runtime.
-    "grpcio==1.76.0",
-    "grpcio-tools==1.76.0",
-    "protobuf==6.33.5",
+    # Deterministic Android protobuf toolchain: grpcio-tools 1.84.0 embeds
+    # libprotoc 35.1; the generated code accepts the 7.36.2 runtime. 1.84.0 is
+    # the first grpcio release with CPython 3.15 wheels.
+    "grpcio==1.84.0",
+    "grpcio-tools==1.84.0",
+    "protobuf==7.36.2",
     "gpsoauth>=1.1.0",
 ]
 # `all` deliberately omits the `android`, `cookies`, and `impersonate` extra

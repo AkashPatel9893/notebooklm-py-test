@@ -5,7 +5,7 @@ import warnings
 
 from notebooklm._android.proto.labs.language.tailwind.sharing import sharing_pb2 as labs_dot_language_dot_tailwind_dot_sharing_dot_sharing__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class LabsTailwindSharingServiceStub(object):
+class LabsTailwindSharingServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -46,7 +46,7 @@ class LabsTailwindSharingServiceStub(object):
                 _registered_method=True)
 
 
-class LabsTailwindSharingServiceServicer(object):
+class LabsTailwindSharingServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def GetProjectDetails(self, request, context):
@@ -82,7 +82,7 @@ def add_LabsTailwindSharingServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class LabsTailwindSharingService(object):
+class LabsTailwindSharingService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

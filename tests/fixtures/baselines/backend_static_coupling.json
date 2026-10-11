@@ -11848,7 +11848,7 @@
       "modules": 76
     },
     "mcp": {
-      "lines": 12018,
+      "lines": 12015,
       "modules": 42
     },
     "root": {
@@ -11877,7 +11877,7 @@
     }
   },
   "summary": {
-    "authored_lines": 154008,
+    "authored_lines": 154005,
     "authored_modules": 492,
     "class_local_edges": 0,
     "cross_subsystem_edges": 1303,

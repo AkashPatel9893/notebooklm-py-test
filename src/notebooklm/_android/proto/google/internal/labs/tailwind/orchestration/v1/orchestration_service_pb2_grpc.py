@@ -16,7 +16,7 @@ from notebooklm._android.proto.google.internal.labs.tailwind.orchestration.v1 im
 from notebooklm._android.proto.google.internal.labs.tailwind.orchestration.v1 import sources_pb2 as google_dot_internal_dot_labs_dot_tailwind_dot_orchestration_dot_v1_dot_sources__pb2
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -36,7 +36,7 @@ if _version_not_supported:
     )
 
 
-class LabsTailwindOrchestrationServiceStub(object):
+class LabsTailwindOrchestrationServiceStub:
     """Cumulative exact service closure for implemented Android calls whose request
     and response FQNs are independently evidenced. Implemented paths backed by
     repository-local wire-equivalent messages stay out of this descriptor and
@@ -347,7 +347,7 @@ class LabsTailwindOrchestrationServiceStub(object):
                 _registered_method=True)
 
 
-class LabsTailwindOrchestrationServiceServicer(object):
+class LabsTailwindOrchestrationServiceServicer:
     """Cumulative exact service closure for implemented Android calls whose request
     and response FQNs are independently evidenced. Implemented paths backed by
     repository-local wire-equivalent messages stay out of this descriptor and
@@ -1013,7 +1013,7 @@ def add_LabsTailwindOrchestrationServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class LabsTailwindOrchestrationService(object):
+class LabsTailwindOrchestrationService:
     """Cumulative exact service closure for implemented Android calls whose request
     and response FQNs are independently evidenced. Implemented paths backed by
     repository-local wire-equivalent messages stay out of this descriptor and
