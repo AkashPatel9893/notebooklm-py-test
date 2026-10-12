@@ -130,5 +130,201 @@
         "expires_on": "2026-10-15"
       }
     ]
+  },
+  "v0.8.5": {
+    "version": 1,
+    "allowances": [
+      {
+        "base_coordinate": 13,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/cookies.py",
+        "id": "v085-cookies-import",
+        "scenario_id": "cleanup-owner-account-cookies",
+        "rationale": "PR #2472 updates collections.abc imports in cookies.py.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 35,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/extraction.py",
+        "id": "v085-extraction-import-1",
+        "scenario_id": "scenario-refresh-adapter-and-cancel",
+        "rationale": "PR #2464 updates typing and contextlib imports in extraction.py.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 36,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/extraction.py",
+        "id": "v085-extraction-import-2",
+        "scenario_id": "scenario-refresh-adapter-and-cancel",
+        "rationale": "PR #2481 updates urlsplit and urlunsplit imports in extraction.py.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 46,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/extraction.py",
+        "id": "v085-extraction-import-3",
+        "scenario_id": "scenario-refresh-adapter-and-cancel",
+        "rationale": "PR #2464 imports AuthError alongside AuthExtractionError.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": [
+          1008,
+          1011
+        ],
+        "disposition": "mapped",
+        "head_coordinate": [
+          1043,
+          1055
+        ],
+        "kind": "branch",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-branch-1",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2481 updates URL-only extraction branch handling in refresh.py.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": [
+          1069,
+          1070
+        ],
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "branch",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-branch-2",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2465 / #2481 restructure refresh cookie jar updates.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 1070,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-1",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2465 / #2481 restructure refresh cookie map updates.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 1071,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-2",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2465 / #2481 restructure cookie input updates.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 772,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-3",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2464 updates token fetch refresh core invocation.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 782,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-4",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2464 updates token fetch baseline extraction.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 785,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-5",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2464 updates token fetch return tuple.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 816,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_auth/refresh.py",
+        "id": "v085-refresh-statement-6",
+        "scenario_id": "cleanup-owner-refresh",
+        "rationale": "PR #2464 updates cold fallbacks call in token fetch.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      },
+      {
+        "base_coordinate": 32,
+        "disposition": "removed",
+        "head_coordinate": null,
+        "kind": "statement",
+        "path": "src/notebooklm/_browser/browser_capture.py",
+        "id": "v085-capture-import-1",
+        "scenario_id": "scenario-cli-repair-rendering",
+        "rationale": "PR #2472 / #2483 update urlparse imports in browser_capture.py.",
+        "owner": "auth maintainers",
+        "valid_for_base_sha": "bff7c66ef5f353f6e160fc243228786d13905d64",
+        "authored_on": "2026-10-12",
+        "expires_on": "2026-10-26"
+      }
+    ]
   }
 }
