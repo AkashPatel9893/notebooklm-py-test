@@ -7,28 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-12
+
+### Added
+
+- **Python 3.15 support (#2480).** Add Python 3.15 classifier, documentation,
+  and testing across CI matrices.
+
 ### Fixed
 
-- **Expired cold-start authentication (#2461).** Exhausted login-redirect
+- **Expired cold-start authentication (#2461, #2464).** Exhausted login-redirect
   recovery raises `AuthError`, so Python callers can catch it, CLI commands
   return `AUTH_ERROR` with exit 1, and MCP tools preserve the re-login hint.
   Read-only Android auth loading reports the same error without running Web
   recovery or persisting cookies.
 
-- **Signed-out sessions misreported as a page-structure change (#2479).** The
-  app host now answers a signed-out request with a token-less landing page
+- **Signed-out sessions misreported as a page-structure change (#2479, #2481).**
+  The app host now answers a signed-out request with a token-less landing page
   instead of a sign-in redirect. When the CSRF token is missing, token loading
   now asks the app's `/login` endpoint whether the session is signed in. A
   stale session reports `Authentication expired` and enters the existing login
   recovery, instead of `CSRF token not found ... page structure has changed`.
 
 - **Headless and CDP re-auth no longer capture a signed-out browser session
-  (#2482).** An app-host landing with a `SID` cookie is no longer enough: the
+  (#2482, #2483).** An app-host landing with a `SID` cookie is no longer enough: the
   capture first asks the app's `/login`, through the browser context's own
   cookies, whether the session is signed in. A signed-out session is refused
   with `HeadlessLoginRequiredError` and the saved authentication is kept,
   instead of being overwritten with another expired set. If the check cannot
   be answered, capture proceeds as before.
+
+- **Browser session capture validation and auth doctor (#2472).** Validate
+  captured browser storage cookies across SPA navigation, refuse anonymous
+  captures, and clarify diagnostic warnings in `notebooklm doctor`.
+
+- **Tokenless Web auth recovery and generation journal (#2465).** Recover
+  tokenless Web authentication and journal generation at submission time.
+
+- **Release archives packaging (#2463).** Exclude internal repository assets
+  from release distribution archives.
+
+- **CI resilience and recovery (#2458, #2460, #2462, #2473, #2475).** Install
+  impersonate extra for package verification, recover tagged publishes with
+  release-scoped auth allowances, allow scheduler delays in upload and
+  download fault scenarios, and reconcile auth repository lint guardrails.
+
+- **MCP test isolation (#2459).** Isolate MCP backend flag tests from ambient
+  user profiles.
+
+### Changed
+
+- **FastMCP 4.1.0 and MCP 2.x upgrade (#2480).** Bump FastMCP to 4.1.0 and adapt
+  MCP tool annotations and tool result handling for Python 3.15 compatibility.
+- **Android protobuf toolchain upgrade (#2480).** Upgrade pinned toolchain to
+  grpcio 1.84.0 and protobuf 7.36.2 for Python 3.15 wheel support.
+- **Dependency updates.** Bump pyjwt to 2.15.0 (#2456), beartype to 0.23.1 (#2480),
+  and librt (#2480).
 
 ## [0.8.4] - 2026-10-01
 
@@ -2872,7 +2906,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.8.1...v0.8.2
