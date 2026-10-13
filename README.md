@@ -214,7 +214,7 @@ Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
 ## Quick Start
 
 <p align="center">
-  <a href="https://asciinema.org/a/767284" target="_blank"><img src="https://asciinema.org/a/767284.svg" width="600" /></a>
+  <a href="https://asciinema.org/a/767284" target="_blank"><img src="https://raw.githubusercontent.com/teng-lin/notebooklm-py/main/docs/demo.png" alt="NotebookLM Session Demo" width="600" /></a>
   <br>
   <em>16-minute session compressed to 30 seconds</em>
 </p>
