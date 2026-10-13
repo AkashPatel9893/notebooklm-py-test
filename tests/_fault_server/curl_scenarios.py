@@ -14,7 +14,7 @@ from notebooklm import NetworkError, ServerError
 from notebooklm.exceptions import ArtifactDownloadError
 
 from .common import ScenarioResult
-from .curl_routing import CurlFaultServer, CurlRouting, build_curl_client
+from .curl_routing import FAULT_REQUEST_TIMEOUT, CurlFaultServer, CurlRouting, build_curl_client
 from .http import Disconnect, Reply, Stall, Transfer, Truncate
 from .web import list_response, rpc_response
 from .web_transfers import (
@@ -161,7 +161,10 @@ async def upload_case(result: ScenarioResult, variant: str) -> None:
             source.write_bytes(body)
             task = asyncio.create_task(client.sources.add_file(NOTEBOOK, source))
             if variant == "cancel":
-                await server.wait_for_gate("curl-upload-body")
+                # Registration and upload start each finish a TLS handshake
+                # first; the default two-second gate wait is too tight for a
+                # loaded runner. The test's 20-second watchdog bounds a hang.
+                await server.wait_for_gate("curl-upload-body", timeout=10)
                 task.cancel()
                 await asyncio.sleep(0)
                 result.require("curl_upload_waits_for_worker", not task.done())
@@ -320,8 +323,8 @@ async def run_scenario(
         faults=["curl:valid-baseline", name, "same-client:recovery"],
         cohort_ids=[f"{operation_id}:0"],
         transport="curl_cffi",
-        rpc_timeout=None if name.startswith("curl_download_") else 0.5,
-        transfer_timeout=None if name.startswith("curl_download_") else 0.5,
+        rpc_timeout=None if name.startswith("curl_download_") else FAULT_REQUEST_TIMEOUT,
+        transfer_timeout=None if name.startswith("curl_download_") else FAULT_REQUEST_TIMEOUT,
         download_fault_low_speed_seconds=1 if name.startswith("curl_download_") else None,
         rate_limit_max_retries=0,
         server_error_max_retries=0,

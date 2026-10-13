@@ -59,11 +59,23 @@ class CurlFaultServer(HttpFaultServer):
         return self
 
 
+# Request deadline for the read and upload scenarios. They inject replies,
+# disconnects and gates, never a timeout, so this only bounds a hang; the test's
+# own 20-second watchdog catches a real one. It must stay well above a loopback
+# TLS handshake on a loaded Windows runner, which has taken over 0.5 seconds.
+# Download scenarios drop the deadline instead (see ``_session_factory``).
+FAULT_REQUEST_TIMEOUT = 5.0
+
+
 class CurlRouting:
     """Own libcurl route lists until sessions and upload workers have closed."""
 
     def __init__(
-        self, server: CurlFaultServer, *, timeout: float = 0.5, download_faults: bool = False
+        self,
+        server: CurlFaultServer,
+        *,
+        timeout: float = FAULT_REQUEST_TIMEOUT,
+        download_faults: bool = False,
     ) -> None:
         from curl_cffi import CurlOpt, ffi, lib
 
@@ -209,8 +221,8 @@ class CurlRouting:
 
 def build_curl_client(routing: CurlRouting) -> NotebookLMClient:
     client = NotebookLMClient.__new__(NotebookLMClient)
-    rpc_timeout = None if routing.download_faults else 0.5
-    timeout = TimeoutOptions(0.5, 0.5, 0.5, 0.5)
+    rpc_timeout = None if routing.download_faults else FAULT_REQUEST_TIMEOUT
+    timeout = TimeoutOptions(*(FAULT_REQUEST_TIMEOUT,) * 4)
     options = normalize_legacy_client_options(
         config=ClientConfig(
             backend=WebBackendConfig(
@@ -221,7 +233,7 @@ def build_curl_client(routing: CurlRouting) -> NotebookLMClient:
             ),
             retry=RetryOptions(rate_limit_max_retries=0, server_error_max_retries=0),
             transfers=TransferOptions(start_timeout=timeout, finalize_timeout=timeout),
-            features=FeatureOptions(chat_timeout=0.5),
+            features=FeatureOptions(chat_timeout=FAULT_REQUEST_TIMEOUT),
         )
     )
     _assemble_client(
