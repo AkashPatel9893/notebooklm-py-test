@@ -5,7 +5,9 @@ test modules (e.g. ``from tests.unit.conftest import make_core``) now that
 the ``tests`` package chain is complete and fully qualified.
 """
 
-from collections.abc import Awaitable, Callable
+import asyncio
+import warnings
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -100,6 +102,26 @@ def install_post_as_stream(
         # MagicMock-style tests assign attributes directly rather than going
         # through ``monkeypatch.setattr``; honor that pattern for them.
         http_client.stream = fake_stream
+
+
+@pytest.fixture
+def restore_event_loop_policy() -> Iterator[None]:
+    """Put back the event-loop policy a test replaces.
+
+    The CLI's selector opt-in sets the global policy on Python 3.10, and some
+    Windows tests install a selector policy on purpose. Without this, later
+    tests in the same worker would inherit it, and on Windows a selector loop
+    cannot start subprocesses.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        original = asyncio.get_event_loop_policy()
+    try:
+        yield
+    finally:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            asyncio.set_event_loop_policy(original)
 
 
 @pytest.fixture

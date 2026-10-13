@@ -67,6 +67,11 @@
     },
     {
       "scope": "module",
+      "source": "browser_capture",
+      "target": "playwright_event_loop"
+    },
+    {
+      "scope": "module",
       "source": "headless_reauth",
       "target": "_auth.recovery_rungs"
     },
@@ -113,7 +118,7 @@
       "path": "src/notebooklm/_browser/__init__.py"
     },
     {
-      "lines": 1500,
+      "lines": 1481,
       "name": "browser_capture",
       "path": "src/notebooklm/_browser/browser_capture.py"
     },
@@ -136,6 +141,11 @@
       "lines": 208,
       "name": "oauth_token",
       "path": "src/notebooklm/_browser/oauth_token.py"
+    },
+    {
+      "lines": 59,
+      "name": "playwright_event_loop",
+      "path": "src/notebooklm/_browser/playwright_event_loop.py"
     }
   ],
   "sccs": {
@@ -144,10 +154,10 @@
   },
   "summary": {
     "function_local_edges": 1,
-    "module_edges": 20,
-    "modules": 6,
-    "total_lines": 3065,
-    "unique_edges": 21
+    "module_edges": 21,
+    "modules": 7,
+    "total_lines": 3105,
+    "unique_edges": 22
   },
   "version": 1
 }

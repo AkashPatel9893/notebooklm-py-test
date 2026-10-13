@@ -19,12 +19,13 @@ import pytest
 from click.testing import CliRunner
 
 import notebooklm.cli.master_token_login as driver
+import notebooklm.cli.runtime as runtime
 import notebooklm.cli.services.login.master_token as mt_service
 from notebooklm._app.master_token import (
     MasterTokenLoginSuccess,
     MasterTokenRemintSuccess,
 )
-from notebooklm._browser import browser_capture
+from notebooklm._browser import playwright_event_loop
 from notebooklm.notebooklm_cli import cli
 from notebooklm.paths import get_storage_path
 
@@ -107,7 +108,7 @@ def test_master_token_refresh_calls_service(tmp_path, monkeypatch):
     # sibling internally via master_token_path_for, so the CLI passes only
     # storage_path (positionally); get_master_token_path() is no longer
     # something this call site needs to compute at all.
-    ref.assert_called_once_with(storage, run_async=asyncio.run)
+    ref.assert_called_once_with(storage, run_async=runtime.run_async)
     assert result.output.strip() == f"Re-minted cookies -> {storage}"
 
 
@@ -137,7 +138,7 @@ def test_master_token_refresh_storage_override_canonicalizes_storage_path(tmp_pa
     assert result.exit_code == 0, result.output
     # The driver canonicalizes an explicit --storage (matching auth_source), so a
     # symlink/relative alias selects the same sibling the L4 recovery rung derives.
-    ref.assert_called_once_with(resolved, run_async=asyncio.run)
+    ref.assert_called_once_with(resolved, run_async=runtime.run_async)
 
 
 def test_master_token_refresh_storage_symlink_canonicalizes_to_target(tmp_path, monkeypatch):
@@ -168,7 +169,7 @@ def test_master_token_refresh_storage_symlink_canonicalizes_to_target(tmp_path, 
             cli, ["login", "--master-token-refresh", "--storage", str(alias_dir / "foo.json")]
         )
     assert result.exit_code == 0, result.output
-    ref.assert_called_once_with(resolved, run_async=asyncio.run)
+    ref.assert_called_once_with(resolved, run_async=runtime.run_async)
 
 
 def test_master_token_login_storage_override_canonicalizes_path(tmp_path, monkeypatch):
@@ -197,7 +198,7 @@ def test_master_token_login_storage_override_canonicalizes_path(tmp_path, monkey
         )
     assert result.exit_code == 0, result.output
     assert boot.call_args.args[0].storage_path == resolved
-    assert boot.call_args.kwargs["run_async"] is asyncio.run
+    assert boot.call_args.kwargs["run_async"] is runtime.run_async
 
 
 def test_master_token_refresh_help_marks_forced_route_legacy():
@@ -339,8 +340,12 @@ class _PolicyProbe:
 @pytest.mark.requires_playwright
 @pytest.mark.parametrize("cdp_url", [None, "http://localhost:9222"])
 def test_master_token_capture_uses_default_windows_policy(monkeypatch, cdp_url):
-    """The policy swap must happen before Playwright enters, then be restored."""
-    original_policy = object()
+    """A selector policy is swapped out before Playwright enters, then restored."""
+
+    class _SelectorPolicy:
+        pass
+
+    original_policy = _SelectorPolicy()
     default_policy = object()
     current_policy = original_policy
     transitions = []
@@ -356,7 +361,8 @@ def test_master_token_capture_uses_default_windows_policy(monkeypatch, cdp_url):
     monkeypatch.setattr(asyncio, "get_event_loop_policy", get_policy)
     monkeypatch.setattr(asyncio, "set_event_loop_policy", set_policy)
     monkeypatch.setattr(asyncio, "DefaultEventLoopPolicy", lambda: default_policy)
-    monkeypatch.setattr(browser_capture.sys, "platform", "win32")
+    monkeypatch.setattr(asyncio, "WindowsSelectorEventLoopPolicy", _SelectorPolicy, raising=False)
+    monkeypatch.setattr(playwright_event_loop.sys, "platform", "win32")
 
     with (
         patch(

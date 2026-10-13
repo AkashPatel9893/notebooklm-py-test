@@ -19,9 +19,7 @@ is re-exported here for existing private import continuity.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import sys
 import time
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
@@ -64,6 +62,9 @@ from .navigation_errors import (
     is_navigation_race,
     navigation_error_code,
 )
+
+# The Windows Playwright event-loop guard is a leaf (#89); re-exported below.
+from .playwright_event_loop import windows_playwright_event_loop
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
@@ -169,28 +170,8 @@ def _abort_capture(
 
 
 @contextmanager
-def windows_playwright_event_loop() -> Iterator[None]:
-    """Temporarily restore Playwright's required event-loop policy on Windows.
-
-    Its subprocesses need ``ProactorEventLoop``, while the CLI installs an
-    incompatible ``WindowsSelectorEventLoopPolicy`` (#79). Restore the original
-    policy on exit; do nothing on other platforms.
-    """
-    if sys.platform != "win32":
-        yield
-        return
-
-    original_policy = asyncio.get_event_loop_policy()
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-    try:
-        yield
-    finally:
-        asyncio.set_event_loop_policy(original_policy)
-
-
-@contextmanager
 def sync_playwright_context() -> Iterator[Any]:
-    """Enter synchronous Playwright with its required Windows event-loop policy."""
+    """Enter synchronous Playwright on a loop that can start its driver on Windows."""
     from playwright.sync_api import sync_playwright
 
     with windows_playwright_event_loop(), sync_playwright() as playwright:

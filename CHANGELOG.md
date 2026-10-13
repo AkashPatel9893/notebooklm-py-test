@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Windows CLI runs on asyncio's default event loop (#2485).** The
+  `notebooklm` CLI no longer installs `WindowsSelectorEventLoopPolicy` at
+  startup (#79). On CPython 3.12–3.14 that loop could drop chunks of large file
+  uploads (`AssertionError: Data should not be empty`, then `NETWORK_ERROR …
+  (upload_finalize)`), and it had already broken Playwright login (#89, #2011).
+  Commands now use the Proactor loop, like `notebooklm-mcp`,
+  `notebooklm-server` and the Python API. If commands hang inside a sandbox
+  such as Sandboxie-Plus (#75), set `NOTEBOOKLM_WINDOWS_EVENT_LOOP=selector`;
+  an unknown value fails before the command starts. On Python 3.11+ the CLI no
+  longer uses the event-loop policy API that Python 3.16 removes,
+  `login --master-token` now runs through the same loop selection, and the CLI
+  hides curl_cffi's Proactor warning, whose advice to install the selector
+  policy no longer applies.
+
 ## [0.8.5] - 2026-10-12
 
 ### Added

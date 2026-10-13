@@ -8,11 +8,14 @@ Related issues:
 - #79: Fix Windows CLI hanging due to asyncio ProactorEventLoop
 - #80: Fix Unicode encoding errors on non-English Windows systems
 - #89: notebooklm login fails on Windows with Python 3.12 (Playwright subprocess)
+- #2485: selector-loop uploads lose data; the CLI now keeps asyncio's default
+  (Proactor) loop and only uses the selector loop on request
 """
 
 import asyncio
 import os
 import sys
+import warnings
 from unittest.mock import patch
 
 import pytest
@@ -47,6 +50,22 @@ class TestPlaywrightSmokeTest:
             assert p.firefox is not None
             assert p.webkit is not None
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only smoke test")
+    @pytest.mark.usefixtures("restore_event_loop_policy")
+    def test_playwright_initializes_after_selector_opt_in(self, monkeypatch):
+        """Playwright still starts after the selector opt-in (#89).
+
+        On Python 3.10 the opt-in sets the selector policy only while a command
+        runs and then restores it; on 3.11+ the policy is never touched.
+        """
+        from notebooklm.cli.runtime import run_async
+
+        monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", "selector")
+        run_async(asyncio.sleep(0))
+
+        with _sync_playwright_context() as p:
+            assert p.chromium is not None
+
     def test_playwright_initializes_on_non_windows(self):
         """Verify Playwright works normally on non-Windows platforms.
 
@@ -59,13 +78,20 @@ class TestPlaywrightSmokeTest:
             assert p.chromium is not None
 
 
+def _set_selector_policy() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 class TestPlaywrightEventLoopFix:
     """Regression tests for Playwright event loop fix (#89).
 
     Playwright's sync API requires ProactorEventLoop on Windows to spawn browser
-    subprocesses. However, we use WindowsSelectorEventLoopPolicy globally to fix
-    CLI hanging (#79). The _windows_playwright_event_loop() context manager
-    temporarily restores the default policy for Playwright.
+    subprocesses. The CLI no longer installs a selector policy, but a Python API
+    caller (or the CLI's selector opt-in on Python 3.10) can. The
+    _windows_playwright_event_loop() context manager then temporarily restores
+    the default policy for Playwright.
     """
 
     def test_context_manager_exists(self):
@@ -74,20 +100,24 @@ class TestPlaywrightEventLoopFix:
 
     def test_context_manager_is_noop_on_non_windows(self):
         """Verify context manager is a no-op on non-Windows platforms."""
-        # Mock ``sys.platform`` to non-Windows; the service reads the same
+        # Mock ``sys.platform`` to non-Windows; the guard reads the same
         # process-wide ``sys`` module object.
-        with patch.object(sys, "platform", "linux"):
-            original_policy = asyncio.get_event_loop_policy()
-            with _windows_playwright_event_loop():
-                # Policy should remain unchanged on non-Windows
-                current_policy = asyncio.get_event_loop_policy()
-                assert current_policy is original_policy
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch.object(
+                asyncio,
+                "set_event_loop_policy",
+                side_effect=AssertionError("policy must not change off Windows"),
+            ),
+            _windows_playwright_event_loop(),
+        ):
+            pass
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    @pytest.mark.usefixtures("restore_event_loop_policy")
     def test_context_manager_restores_policy_on_windows(self):
         """Verify context manager switches to default policy and restores on exit."""
-        # Ensure we start with SelectorEventLoopPolicy
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        _set_selector_policy()
 
         with _windows_playwright_event_loop():
             inside_policy = asyncio.get_event_loop_policy()
@@ -103,10 +133,10 @@ class TestPlaywrightEventLoopFix:
         )
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    @pytest.mark.usefixtures("restore_event_loop_policy")
     def test_context_manager_restores_on_exception(self):
         """Verify policy is restored even if an exception occurs."""
-        # Ensure we start with SelectorEventLoopPolicy
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        _set_selector_policy()
 
         with pytest.raises(ValueError), _windows_playwright_event_loop():
             raise ValueError("Test exception")
@@ -119,30 +149,152 @@ class TestPlaywrightEventLoopFix:
 
 
 class TestWindowsEventLoopPolicy:
-    """Regression tests for Windows asyncio event loop policy fix (#75, #79).
+    """The CLI keeps asyncio's default (Proactor) loop on Windows (#2485).
 
-    The default ProactorEventLoop on Windows can hang indefinitely at the IOCP
-    layer (GetQueuedCompletionStatus) in certain environments like Sandboxie.
-    The fix sets WindowsSelectorEventLoopPolicy at CLI startup.
+    It used to install WindowsSelectorEventLoopPolicy at import (#79), which
+    broke Playwright (#89) and, on CPython 3.12-3.14, lost upload data (#2485).
+    The selector loop is now opt-in via NOTEBOOKLM_WINDOWS_EVENT_LOOP. On Python
+    3.11+ it is passed to the runner as a loop factory and the global policy is
+    untouched; Python 3.10 falls back to setting the policy.
     """
 
-    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
-    def test_selector_event_loop_policy_is_set(self):
-        """Verify Windows uses SelectorEventLoop after CLI initialization.
+    _CURL_CFFI_ADVICE = (
+        "\n    Proactor event loop does not implement add_reader family of methods "
+        "required.\n    Registering an additional selector thread for add_reader support."
+    )
 
-        This prevents hanging on IOCP operations (see issue #75).
-        The policy should be set in notebooklm_cli.main() before any async code runs.
+    def test_windows_runtime_installs_no_event_loop_policy(self, monkeypatch):
+        """Simulated Windows startup must leave the event-loop policy alone."""
+        from notebooklm import notebooklm_cli
+
+        monkeypatch.setattr(notebooklm_cli.sys, "platform", "win32")
+        monkeypatch.setattr(notebooklm_cli.sys, "stdout", None)
+        monkeypatch.setattr(notebooklm_cli.sys, "stderr", None)
+        monkeypatch.setattr(
+            asyncio,
+            "set_event_loop_policy",
+            lambda policy: pytest.fail("the CLI must not install an event loop policy"),
+        )
+        monkeypatch.delenv("PYTHONUTF8", raising=False)
+
+        notebooklm_cli._configure_windows_runtime()
+
+    def _emitted_after(self, setup) -> list[str]:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            setup()
+            warnings.warn(self._CURL_CFFI_ADVICE, UserWarning, stacklevel=1)
+            warnings.warn("an unrelated warning", UserWarning, stacklevel=1)
+        return ["curl_cffi" if "Proactor" in str(w.message) else str(w.message) for w in caught]
+
+    def test_cli_main_hides_curl_cffi_proactor_advice_on_windows(self, monkeypatch):
+        """The CLI hides curl_cffi's 'use the selector policy' warning; others stay."""
+        from notebooklm import notebooklm_cli
+
+        monkeypatch.setattr(notebooklm_cli.sys, "platform", "win32")
+        emitted = self._emitted_after(notebooklm_cli._hide_curl_cffi_proactor_advice)
+        assert emitted == ["an unrelated warning"]
+
+    def test_curl_cffi_advice_is_kept_off_windows(self, monkeypatch):
+        from notebooklm import notebooklm_cli
+
+        monkeypatch.setattr(notebooklm_cli.sys, "platform", "linux")
+        emitted = self._emitted_after(notebooklm_cli._hide_curl_cffi_proactor_advice)
+        assert emitted == ["curl_cffi", "an unrelated warning"]
+
+    def test_importing_the_cli_does_not_install_the_filter(self, monkeypatch):
+        """Applications that import the CLI module keep their warning filters."""
+        from notebooklm import notebooklm_cli
+
+        monkeypatch.setattr(notebooklm_cli.sys, "platform", "win32")
+        monkeypatch.setattr(notebooklm_cli.sys, "stdout", None)
+        monkeypatch.setattr(notebooklm_cli.sys, "stderr", None)
+        monkeypatch.delenv("PYTHONUTF8", raising=False)
+        emitted = self._emitted_after(notebooklm_cli._configure_windows_runtime)
+        assert emitted == ["curl_cffi", "an unrelated warning"]
+
+    @pytest.mark.parametrize(
+        ("args", "expect_json"), [(["status"], False), (["status", "--json"], True)]
+    )
+    def test_bad_event_loop_value_fails_before_the_command_runs(
+        self, monkeypatch, tmp_path, args, expect_json
+    ):
+        """A typo is rejected by the root group, before e.g. a login starts.
+
+        ``status`` needs no event loop and succeeds on its own, so it only
+        fails here if the root group checks the variable first.
         """
-        import asyncio
+        import json
 
-        # Import the CLI main to trigger the policy setup
-        # Note: In actual usage, main() sets the policy before Click runs
+        from click.testing import CliRunner
+
+        from notebooklm.cli import runtime
+        from notebooklm.notebooklm_cli import cli
+
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", "selectr")
+        monkeypatch.setattr(runtime.sys, "platform", "win32")
+        result = CliRunner().invoke(cli, args)
+        monkeypatch.undo()
+
+        assert result.exit_code == 1
+        if expect_json:
+            payload = json.loads(result.stdout)
+            assert payload["code"] == "CONFIG_ERROR"
+            assert "NOTEBOOKLM_WINDOWS_EVENT_LOOP='selectr'" in payload["message"]
+        else:
+            assert "NOTEBOOKLM_WINDOWS_EVENT_LOOP='selectr'" in result.output
+
+    def test_valid_event_loop_value_is_accepted(self, monkeypatch, tmp_path):
+        from click.testing import CliRunner
+
+        from notebooklm.cli import runtime
+        from notebooklm.notebooklm_cli import cli
+
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", "Selector")
+        monkeypatch.setattr(runtime.sys, "platform", "win32")
+        result = CliRunner().invoke(cli, ["status"])
+        monkeypatch.undo()
+
+        assert result.exit_code == 0, result.output
+
+    def test_only_the_owners_touch_the_event_loop_policy(self):
+        """Nothing in the package installs a selector policy except the two owners.
+
+        Runs on every OS, so a policy call reintroduced at CLI import fails
+        Linux and macOS CI too, not only the Windows cell.
+        """
+        import ast
+        from pathlib import Path
+
+        import notebooklm
+
+        package_root = Path(notebooklm.__file__).parent
+        owners = {"cli/runtime.py", "_browser/playwright_event_loop.py"}
+        offenders = []
+        for path in package_root.rglob("*.py"):
+            relative = path.relative_to(package_root).as_posix()
+            if relative in owners:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                name = getattr(node, "attr", None) or getattr(node, "id", None)
+                if name in {"set_event_loop_policy", "WindowsSelectorEventLoopPolicy"}:
+                    offenders.append(f"{relative}:{node.lineno}")
+        assert offenders == []
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    def test_cli_import_keeps_default_policy(self):
+        """Importing the CLI on Windows must not select the selector loop."""
         from notebooklm.notebooklm_cli import main  # noqa: F401
 
-        policy = asyncio.get_event_loop_policy()
-        assert isinstance(policy, asyncio.WindowsSelectorEventLoopPolicy), (
-            "Windows must use WindowsSelectorEventLoopPolicy to avoid IOCP hanging. "
-            "See issue #75: https://github.com/teng-lin/notebooklm-py/issues/75"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            policy = asyncio.get_event_loop_policy()
+            selector_policy = asyncio.WindowsSelectorEventLoopPolicy
+        assert not isinstance(policy, selector_policy), (
+            "The CLI must not force WindowsSelectorEventLoopPolicy; see issue #2485."
         )
 
 
@@ -172,7 +324,7 @@ class TestWindowsUTF8Mode:
         monkeypatch.setattr(notebooklm_cli.sys, "stdout", stdout)
         monkeypatch.setattr(notebooklm_cli.sys, "stderr", stderr)
         monkeypatch.setattr(
-            notebooklm_cli.asyncio,
+            asyncio,
             "set_event_loop_policy",
             lambda policy: pytest.fail("event loop policy should not be set on non-Windows"),
         )
@@ -219,26 +371,12 @@ class TestWindowsUTF8Mode:
             def reconfigure(self, **kwargs):
                 self.reconfigure_calls.append(kwargs)
 
-        class DummyPolicy:
-            pass
-
         stdout = DummyStream()
         stderr = DummyStream()
-        policies = []
 
-        monkeypatch.setitem(
-            notebooklm_cli.asyncio.__dict__,
-            "WindowsSelectorEventLoopPolicy",
-            DummyPolicy,
-        )
         monkeypatch.setattr(notebooklm_cli.sys, "platform", "win32")
         monkeypatch.setattr(notebooklm_cli.sys, "stdout", stdout)
         monkeypatch.setattr(notebooklm_cli.sys, "stderr", stderr)
-        monkeypatch.setattr(
-            notebooklm_cli.asyncio,
-            "set_event_loop_policy",
-            lambda policy: policies.append(policy),
-        )
         monkeypatch.delenv("PYTHONUTF8", raising=False)
 
         notebooklm_cli._configure_windows_runtime()
@@ -246,7 +384,6 @@ class TestWindowsUTF8Mode:
         assert os.environ["PYTHONUTF8"] == "1"
         assert stdout.reconfigure_calls == [{"encoding": "utf-8", "errors": "replace"}]
         assert stderr.reconfigure_calls == [{"encoding": "utf-8", "errors": "replace"}]
-        assert isinstance(policies[0], DummyPolicy)
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
     def test_utf8_mode_enabled(self):

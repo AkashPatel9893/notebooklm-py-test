@@ -35,11 +35,21 @@ def _json_requested(args: Sequence[str] | None) -> bool:
     return False
 
 
+class ConfigurationClickException(click.ClickException):
+    """A configuration problem found before any command runs.
+
+    Rendered like any ``ClickException``, but reported as ``CONFIG_ERROR`` in
+    the ``--json`` envelope, matching configuration errors raised by commands.
+    """
+
+    error_code = "CONFIG_ERROR"
+
+
 def _emit_json_click_error(exc: click.ClickException) -> NoReturn:
     """Emit a Click exception through the canonical JSON error envelope."""
     output_error(
         exc.format_message(),
-        "VALIDATION_ERROR",
+        getattr(exc, "error_code", "VALIDATION_ERROR"),
         json_output=True,
         exit_code=exc.exit_code,
     )

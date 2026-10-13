@@ -27,14 +27,6 @@ _READ = Route.rpc("wXbhsf")
 _ROTATE = Route("POST", "accounts.google.com", "/RotateCookies")
 
 
-@pytest.fixture
-def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
-    """Subprocess ownership requires the Proactor loop on Windows."""
-    if sys.platform == "win32":
-        return asyncio.WindowsProactorEventLoopPolicy()
-    return asyncio.get_event_loop_policy()
-
-
 async def _observe(path: Path, predicate, *, timeout: float = 10):
     async def poll():
         while True:

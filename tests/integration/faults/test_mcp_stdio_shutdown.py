@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -17,13 +16,6 @@ from pydantic import ValidationError
 from tests._fault_server import mcp_stdio_session as transport
 
 pytestmark = pytest.mark.allow_no_vcr
-
-
-@pytest.fixture
-def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
-    if sys.platform == "win32":
-        return asyncio.WindowsProactorEventLoopPolicy()
-    return asyncio.get_event_loop_policy()
 
 
 @pytest.mark.parametrize(

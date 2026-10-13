@@ -264,6 +264,10 @@ def test_pr_matrix_runs_once_without_coverage_and_canonical_owns_reality() -> No
         "tests/unit/test_windows_compatibility.py::TestPlaywrightSmokeTest::"
         "test_playwright_initializes_with_context_manager"
     ) in smoke_command
+    assert (
+        "tests/unit/test_windows_compatibility.py::TestPlaywrightSmokeTest::"
+        "test_playwright_initializes_after_selector_opt_in"
+    ) in smoke_command
     assert "-m requires_playwright" in smoke_command
     assert "-n 0" in smoke_command
     assert "--no-cov" in smoke_command

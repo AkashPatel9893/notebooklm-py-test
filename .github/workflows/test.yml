@@ -501,9 +501,12 @@ jobs:
       # The #89 regression only needs the real Playwright driver process; it
       # intentionally does not launch Chromium, so Windows needs no browser
       # download/cache. ``-n 0`` makes the process-policy smoke explicitly serial.
+      # The second test covers Playwright after the NOTEBOOKLM_WINDOWS_EVENT_LOOP
+      # selector opt-in (#2485).
       run: >-
         uv run pytest
         tests/unit/test_windows_compatibility.py::TestPlaywrightSmokeTest::test_playwright_initializes_with_context_manager
+        tests/unit/test_windows_compatibility.py::TestPlaywrightSmokeTest::test_playwright_initializes_after_selector_opt_in
         -m requires_playwright -n 0 --no-cov
 
   repo-lint:

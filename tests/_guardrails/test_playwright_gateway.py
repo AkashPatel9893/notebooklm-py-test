@@ -1,10 +1,11 @@
 """Keep raw synchronous Playwright startup behind its Windows-safe gateway.
 
-The CLI installs ``WindowsSelectorEventLoopPolicy`` on Windows, while
-Playwright needs the default Proactor policy to start its driver subprocess.
-Every raw ``sync_playwright`` entry point must therefore stay inside the one
-gateway that swaps and restores the policy. This guard prevents a new caller
-from repeating #2011 by bypassing that gateway.
+Playwright needs the default Proactor policy on Windows to start its driver
+subprocess, but a Python API caller (or the CLI's selector opt-in on Python
+3.10) may have installed ``WindowsSelectorEventLoopPolicy``. Every raw
+``sync_playwright`` entry point must therefore stay inside the one gateway that
+swaps and restores such a policy. This guard prevents a new caller from
+repeating #2011 by bypassing that gateway.
 """
 
 from __future__ import annotations
