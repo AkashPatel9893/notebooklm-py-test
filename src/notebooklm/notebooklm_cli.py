@@ -216,6 +216,13 @@ def cli(ctx, storage, profile, backend, verbose, quiet):
         logging.getLogger(__name__).debug(
             "Windows event loop: %s", loop_choice or "proactor (asyncio default)"
         )
+    if loop_choice == "selector":
+        # Fix #2485: on CPython 3.12-3.14 the selector transport drops a chunk
+        # when a Windows send() would block, corrupting large uploads. Install
+        # the fix CPython 3.15 shipped; a no-op on interpreters without the bug.
+        from ._windows_asyncio import install_selector_write_fix
+
+        install_selector_write_fix()
 
     # Set up profile system
     from .paths import set_active_profile

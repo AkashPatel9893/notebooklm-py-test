@@ -9,7 +9,8 @@ Related issues:
 - #80: Fix Unicode encoding errors on non-English Windows systems
 - #89: notebooklm login fails on Windows with Python 3.12 (Playwright subprocess)
 - #2485: selector-loop uploads lose data; the CLI now keeps asyncio's default
-  (Proactor) loop and only uses the selector loop on request
+  (Proactor) loop and only uses the selector loop on request, installing
+  CPython's write fix when it does (see test_windows_asyncio.py)
 """
 
 import asyncio
@@ -20,6 +21,7 @@ from unittest.mock import patch
 
 import pytest
 
+from notebooklm import _windows_asyncio
 from notebooklm._browser.browser_capture import (
     sync_playwright_context as _sync_playwright_context,
 )
@@ -245,19 +247,123 @@ class TestWindowsEventLoopPolicy:
         else:
             assert "NOTEBOOKLM_WINDOWS_EVENT_LOOP='selectr'" in result.output
 
-    def test_valid_event_loop_value_is_accepted(self, monkeypatch, tmp_path):
+    def _invoke_status(self, monkeypatch, tmp_path, platform, loop_value):
+        """Run ``status`` on a simulated platform; return (result, fix installs)."""
         from click.testing import CliRunner
 
         from notebooklm.cli import runtime
         from notebooklm.notebooklm_cli import cli
 
+        installs = []
+        monkeypatch.setattr(
+            _windows_asyncio, "install_selector_write_fix", lambda: installs.append(True)
+        )
         monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
-        monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", "Selector")
-        monkeypatch.setattr(runtime.sys, "platform", "win32")
+        if loop_value is None:
+            monkeypatch.delenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", raising=False)
+        else:
+            monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", loop_value)
+        monkeypatch.setattr(runtime.sys, "platform", platform)
         result = CliRunner().invoke(cli, ["status"])
         monkeypatch.undo()
+        return result, installs
+
+    def test_valid_event_loop_value_is_accepted(self, monkeypatch, tmp_path):
+        result, _ = self._invoke_status(monkeypatch, tmp_path, "win32", "Selector")
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize(
+        ("platform", "loop_value", "expected_installs"),
+        [
+            ("win32", "selector", [True]),
+            ("win32", " Selector ", [True]),
+            ("win32", "proactor", []),
+            ("win32", None, []),
+            pytest.param(
+                "linux",
+                "selector",
+                [],
+                marks=pytest.mark.skipif(
+                    sys.platform == "win32", reason="faking linux on real Windows is not meaningful"
+                ),
+            ),
+        ],
+    )
+    def test_selector_write_fix_follows_the_loop_choice(
+        self, monkeypatch, tmp_path, platform, loop_value, expected_installs
+    ):
+        """Only the selector opt-in installs the #2485 write fix, once per run.
+
+        The default Proactor loop never uses the selector transport, so
+        patching asyncio there would only add risk.
+        """
+        result, installs = self._invoke_status(monkeypatch, tmp_path, platform, loop_value)
+        assert result.exit_code == 0, result.output
+        assert installs == expected_installs
+
+    def test_bad_event_loop_value_installs_no_fix(self, monkeypatch, tmp_path):
+        result, installs = self._invoke_status(monkeypatch, tmp_path, "win32", "selectr")
+        assert result.exit_code == 1
+        assert installs == []
+
+    def test_only_the_root_group_installs_the_write_fix(self):
+        """The #2485 fix is installed from the ``cli`` callback and nowhere else.
+
+        Importing the CLI module, or the library, must not patch asyncio; a
+        module-level install would. Checked statically so it fails on every OS.
+        """
+        import ast
+        from pathlib import Path
+
+        import notebooklm
+
+        package_root = Path(notebooklm.__file__).parent
+        callers = []
+        for path in package_root.rglob("*.py"):
+            relative = path.relative_to(package_root).as_posix()
+            if relative == "_windows_asyncio.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            parents = {
+                child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+            }
+            for node in ast.walk(tree):
+                name = getattr(node, "attr", None) or getattr(node, "id", None)
+                if name != "install_selector_write_fix" and not (
+                    isinstance(node, ast.ImportFrom)
+                    and (node.module or "").endswith("_windows_asyncio")
+                ):
+                    continue
+                scope = parents.get(node)
+                while scope is not None and not isinstance(scope, ast.FunctionDef):
+                    scope = parents.get(scope)
+                callers.append((relative, scope.name if scope else "<module>"))
+        assert callers and set(callers) == {("notebooklm_cli.py", "cli")}
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
+    def test_selector_opt_in_installs_the_real_fix_where_needed(self, monkeypatch, tmp_path):
+        """On real Windows the opt-in patches exactly the interpreters with the bug."""
+        from asyncio import selector_events
+
+        from click.testing import CliRunner
+
+        from notebooklm.notebooklm_cli import cli
+        from tests._helpers.windows_asyncio import stdlib_has_write_send_bug
+
+        transport_cls = selector_events._SelectorSocketTransport
+        original = transport_cls.__dict__.get("_write_send")
+        if original is not None:
+            # Re-set the current method so teardown restores it after the install.
+            monkeypatch.setattr(transport_cls, "_write_send", original)
+        monkeypatch.setenv("NOTEBOOKLM_HOME", str(tmp_path))
+        monkeypatch.setenv("NOTEBOOKLM_WINDOWS_EVENT_LOOP", "selector")
+        expected = stdlib_has_write_send_bug()
+
+        result = CliRunner().invoke(cli, ["status"])
 
         assert result.exit_code == 0, result.output
+        installed = getattr(transport_cls, "_write_send", None) is _windows_asyncio._write_send
+        assert installed is expected
 
     def test_only_the_owners_touch_the_event_loop_policy(self):
         """Nothing in the package installs a selector policy except the two owners.

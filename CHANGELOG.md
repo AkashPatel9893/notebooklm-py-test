@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hides curl_cffi's Proactor warning, whose advice to install the selector
   policy no longer applies.
 
+### Fixed
+
+- **Windows CLI uploads on the selector loop no longer lose data (#2485).** On
+  Python 3.12–3.14, asyncio's selector loop drops a chunk of the request body
+  when a Windows socket send would block, so multi-megabyte uploads failed
+  with a flood of `AssertionError: Data should not be empty` and left the
+  source stuck in `preparing`. When `NOTEBOOKLM_WINDOWS_EVENT_LOOP=selector`
+  selects that loop, the CLI now installs the fix from Python 3.15, only on
+  interpreters that have the bug. The default Proactor loop, the Python API,
+  `notebooklm-mcp` and `notebooklm-server` leave asyncio unpatched.
+
 ## [0.8.5] - 2026-10-12
 
 ### Added

@@ -2049,6 +2049,7 @@ Per-file index plus the full `src/notebooklm` + `tests` repository tree. The tre
 | `_notebook_metadata.py` | Transport-neutral notebook metadata protocols and composition service; no concrete RPC/source-listing dependency |
 | `_url_utils.py`, `urls.py` | URL parsing/validation internals and the public URL helper facade |
 | `_version_check.py` | Dynamic client-side version deprecation guard |
+| `_windows_asyncio.py` | Version-gated backport of CPython 3.15's selector-transport write fix (#2485); installed by the root CLI group only when `NOTEBOOKLM_WINDOWS_EVENT_LOOP=selector` selects that loop on Windows |
 | `_version_info.py` | Human-facing `version_string()` — package version + short git commit (embedded by `hatch_build.py` at build time, or live `git` from a checkout) |
 | `_chat.py` | Abstract `ChatAPI`, shared chat orchestration, and its bounded recently-deleted-conversation tracker; `delete_conversation` records the id under the conversation lock so a concurrent null-conversation ask can recover the server's real post-POST conversation id (#1875) |
 | `_web/transport/middleware/chain.py` | Constructs the middleware chain in the canonical ADR-0009 order |
@@ -2140,6 +2141,7 @@ src/notebooklm/
 ├── _url_utils.py                # URL validation helpers
 ├── _version_check.py            # Deprecation version guard
 ├── _version_info.py             # version_string(): version + short git commit
+├── _windows_asyncio.py          # Windows CLI: backport of CPython's selector-transport write fix (#2485)
 ├── _redact.py                   # Transport-neutral secret/home-path/file-link scrubber (redact(msg, max_length)); shared chokepoint under both mcp/_errors.py and server/_errors.py
 ├── _app/                        # Transport-neutral business-logic layer (CLI/MCP/HTTP adapters share it)
 │   ├── android_profiles.py      # Cookie-free Android client construction for isolated profile adapters

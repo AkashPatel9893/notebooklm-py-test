@@ -10985,7 +10985,7 @@
     },
     {
       "kind": "from",
-      "lineno": 231,
+      "lineno": 238,
       "scope": "cli",
       "scope_kind": "function",
       "source": "notebooklm.notebooklm_cli",
@@ -11870,8 +11870,8 @@
       "modules": 42
     },
     "root": {
-      "lines": 27260,
-      "modules": 91
+      "lines": 27390,
+      "modules": 92
     },
     "rpc": {
       "lines": 385,
@@ -11895,8 +11895,8 @@
     }
   },
   "summary": {
-    "authored_lines": 154192,
-    "authored_modules": 493,
+    "authored_lines": 154322,
+    "authored_modules": 494,
     "class_local_edges": 0,
     "cross_subsystem_edges": 1305,
     "dynamic_import_calls": 10,
