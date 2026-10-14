@@ -30,8 +30,14 @@ _ROTATE = Route("POST", "accounts.google.com", "/RotateCookies")
 async def _observe(path: Path, predicate, *, timeout: float = 10):
     async def poll():
         while True:
-            if path.exists():
-                value = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                contents = path.read_text(encoding="utf-8")
+            except (FileNotFoundError, PermissionError):
+                # The worker publishes via atomic replacement. Windows can deny
+                # a racing open briefly; retry within the observation deadline.
+                pass
+            else:
+                value = json.loads(contents)
                 if predicate(value):
                     return value
             await asyncio.sleep(0.025)
