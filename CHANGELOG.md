@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selects that loop, the CLI now installs the fix from Python 3.15, only on
   interpreters that have the bug. The default Proactor loop, the Python API,
   `notebooklm-mcp` and `notebooklm-server` leave asyncio unpatched.
+- **Android audio and video downloads no longer crawl at playback speed.** The
+  media host, `googlevideo.com`, throttles a whole-file download to about
+  32 KiB/s, so a 23-minute audio overview took roughly 12 minutes and often
+  failed with `Android transfer failed (code=transport …)`. The Android backend
+  now fetches that host in contiguous 8 MiB ranges, which arrive at full
+  speed: the same 22.8 MB file downloads in about a second. Each range is
+  checked against the previous one and the declared total, and a server that
+  ignores the range is still read in full.
 
 ## [0.8.5] - 2026-10-12
 

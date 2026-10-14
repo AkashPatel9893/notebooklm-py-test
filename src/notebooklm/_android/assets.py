@@ -146,6 +146,12 @@ def _is_android_download_host(host: str) -> bool:
     )
 
 
+def _is_progressive_media_host(host: str) -> bool:
+    """googlevideo throttles unranged media reads to about playback speed."""
+
+    return host.endswith(".googlevideo.com")
+
+
 def _validated_host(url: str) -> str | None:
     if any(ord(char) < 32 or ord(char) == 127 for char in url):
         return None
@@ -513,6 +519,7 @@ class AndroidAssetDownloadService(EpochFenced, AssetDownloadService):
                 safe_host=_safe_approved_host,
                 assert_active=lambda: self.assert_epoch(expected_epoch),
                 chain=False,
+                ranged_hosts=_is_progressive_media_host,
             )
         except AuthError:
             credential_for.invalidate_last()

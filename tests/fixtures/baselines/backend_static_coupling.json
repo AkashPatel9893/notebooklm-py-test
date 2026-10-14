@@ -11850,7 +11850,7 @@
   ],
   "subsystems": {
     "android": {
-      "lines": 16470,
+      "lines": 16477,
       "modules": 54
     },
     "app": {
@@ -11870,7 +11870,7 @@
       "modules": 42
     },
     "root": {
-      "lines": 27390,
+      "lines": 27595,
       "modules": 92
     },
     "rpc": {
@@ -11895,7 +11895,7 @@
     }
   },
   "summary": {
-    "authored_lines": 154322,
+    "authored_lines": 154534,
     "authored_modules": 494,
     "class_local_edges": 0,
     "cross_subsystem_edges": 1305,
