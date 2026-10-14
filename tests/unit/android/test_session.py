@@ -789,6 +789,30 @@ async def test_stream_aclose_cancels_wire_call_and_releases_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_stop_after_cancels_wire_call_that_lingers() -> None:
+    def read_past_final() -> _Message:
+        raise AssertionError("stream read past its stop_after frame")
+
+    channel = _Channel()
+    channel.stream_outcomes = [[_Message(b"final"), read_past_final]]
+    session, _, _, _, supervisor = await _open(channel=channel)
+
+    frames = [
+        frame
+        async for frame in session.stream(
+            STREAM_METHOD,
+            _Message(b"request"),
+            response_type=_Message,
+            stop_after=lambda frame: frame == _Message(b"final"),
+        )
+    ]
+
+    assert frames == [_Message(b"final")]
+    assert channel.stream_calls[0].cancelled
+    assert supervisor._current is not None and supervisor._current.in_flight == 0
+
+
+@pytest.mark.asyncio
 async def test_stream_enforces_cumulative_response_byte_cap_and_cancels_wire() -> None:
     channel = _Channel()
     channel.stream_outcomes = [[_Message(b"one"), _Message(b"two")]]

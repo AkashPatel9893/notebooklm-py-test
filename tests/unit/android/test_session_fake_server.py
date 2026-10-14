@@ -10,6 +10,7 @@ Nothing between ``AndroidSession`` and the server is mocked.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -112,8 +113,8 @@ class _Service:
     stream_requests: list[Any] = field(default_factory=list)
     unary_metadata: list[list[tuple[str, str]]] = field(default_factory=list)
     stream_metadata: list[list[tuple[str, str]]] = field(default_factory=list)
-    # Set by stream behaviours whose pending await is cancelled by the client.
-    stream_cancel_seen: asyncio.Event = field(default_factory=asyncio.Event)
+    # Set when a stream RPC ends on the server, however it ends.
+    stream_closed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def get_project(self, request: Any, context: Any) -> Any:
         self.unary_calls += 1
@@ -125,6 +126,12 @@ class _Service:
         self.stream_calls += 1
         self.stream_requests.append(request)
         self.stream_metadata.append([(k, v) for k, v in context.invocation_metadata()])
+        # Proof of teardown that does not depend on where the client's cancel
+        # lands. grpc.aio cancels the handler task; if that happens while it
+        # awaits a yielded frame's send (or the send fails), the generator is
+        # never resumed, so a CancelledError caught in the stall is not
+        # guaranteed. ``context.cancelled()`` stays False for client cancels.
+        context.add_done_callback(lambda _context: self.stream_closed.set())
         async for item in self.on_stream(request, context):
             yield item
 
@@ -581,29 +588,29 @@ async def test_stream_aclose_cancels_wire_call_and_releases_call_scope() -> None
     async def hold_after_one(request: Any, context: Any) -> AsyncIterator[Any]:
         del request
         yield _frame("one")
-        try:
-            await asyncio.sleep(5.0)
-        except asyncio.CancelledError:
-            # grpc.aio delivers a client cancel to the handler as task
-            # cancellation; ``context.cancelled()`` stays False on the server
-            # side even for a raw ``call.cancel()``, so the CancelledError is
-            # the observable proof that the wire call was torn down.
-            service.stream_cancel_seen.set()
-            raise
-        raise AssertionError("client cancellation never reached the handler")  # pragma: no cover
+        await asyncio.Event().wait()
 
     service = _Service(on_stream=hold_after_one)
     # One RPC slot: the follow-up unary is admitted only if the stream's
-    # supervisor lease really was released by ``aclose()``.
-    async with _running_session(service, max_concurrent_rpcs=1) as harness:
+    # supervisor lease really was released by ``aclose()``. The 20-second
+    # deadline outlasts the 10-second waits below, so only the client's cancel
+    # can end the stalled stream in time, yet stays well under pytest's
+    # 60-second timeout so the aclose() bound below can report its failure.
+    async with _running_session(service, timeout=20.0, max_concurrent_rpcs=1) as harness:
         iterator = _generate(harness)
         first = await iterator.__anext__()
         assert first.answer.response == "one"
+        # Awaited in this task, not via wait_for: on Python 3.10 wait_for runs
+        # aclose() in a new task, whose context cannot reset the stream's
+        # journal binding. A client that drained instead of cancelling would
+        # block here until the deadline.
+        started = time.monotonic()
         await iterator.aclose()
+        assert time.monotonic() - started < 10.0
 
-        await asyncio.wait_for(service.stream_cancel_seen.wait(), timeout=2.0)
+        await asyncio.wait_for(service.stream_closed.wait(), timeout=10.0)
 
-        await asyncio.wait_for(_get_project(harness), timeout=2.0)
+        await asyncio.wait_for(_get_project(harness), timeout=10.0)
 
     assert service.stream_calls == 1
     assert service.unary_calls == 1
