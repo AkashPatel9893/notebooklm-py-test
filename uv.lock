@@ -1568,6 +1568,7 @@ dependencies = [
     { name = "httpx" },
     { name = "idna" },
     { name = "rich" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -1682,6 +1683,7 @@ requires-dist = [
     { name = "rookie-cookies", marker = "extra == 'cookies'", specifier = ">=0.1.0,<1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.9" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0.0,<3" },
+    { name = "typing-extensions", specifier = ">=4.4,<5" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.34,<1" },
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0,<9" },
 ]

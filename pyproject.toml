@@ -33,6 +33,7 @@ dependencies = [
     "click>=8.0.0,<9",
     "rich>=13.0.0,<16",
     "filelock>=3.13,<5",
+    "typing_extensions>=4.4,<5",
 ]
 
 [project.urls]

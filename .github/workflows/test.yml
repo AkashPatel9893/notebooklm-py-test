@@ -100,6 +100,17 @@ jobs:
         test "${#wheels[@]}" -eq 1
         uv run python scripts/check_base_wheel.py --wheel "${wheels[0]}"
 
+    - name: Verify base wheel on Python 3.15
+      # AnyIO supplies typing_extensions on older Python versions, which can
+      # hide an undeclared runtime dependency. Check a clean modern install too.
+      shell: bash
+      run: |
+        uv python install 3.15
+        wheels=(dist/notebooklm_py-*.whl)
+        test "${#wheels[@]}" -eq 1
+        uv run python scripts/check_base_wheel.py --wheel "${wheels[0]}" \
+          --python "$(uv python find 3.15)"
+
     - name: Run pre-commit checks
       run: uv run pre-commit run --all-files
 

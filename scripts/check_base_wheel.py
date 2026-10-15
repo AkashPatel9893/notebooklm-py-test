@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,14 @@ def _venv_console(root: Path) -> Path:
     return root / "bin" / "notebooklm"
 
 
+def _requirement_name(requirement: str) -> str:
+    """Extract and normalize the complete distribution name using only the stdlib."""
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement.lstrip())
+    return re.sub(r"[-_.]+", "-", match.group()).lower() if match else ""
+
+
 def _inspect_wheel(wheel: Path) -> None:
+    """Validate browser modules and required dependency declarations in a built wheel."""
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         browser_files = {
@@ -57,6 +65,14 @@ def _inspect_wheel(wheel: Path) -> None:
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
 
     requirements = metadata.get_all("Requires-Dist", [])
+    # Older Python versions and optional extras can supply this transitively,
+    # hiding a missing direct dependency even in a clean-install smoke test.
+    if not any(
+        _requirement_name(requirement) == "typing-extensions" and ";" not in requirement
+        for requirement in requirements
+    ):
+        raise RuntimeError("wheel metadata has no unconditional typing_extensions requirement")
+
     playwright_requirements = [
         requirement
         for requirement in requirements
