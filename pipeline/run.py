@@ -22,11 +22,10 @@ Phase 2 downloads every completed artifact into:
 
     output/<Class>/<Subject>/<Chapter>/
         source.pdf
-        study_guide.md
-        quiz.json / .html / .md
-        flashcards.json / .html / .md
+        quiz.json
+        flashcards.json
         mind_map.json
-        slides.pdf / .pptx
+        slides.pdf
         audio.m4a
         cinematic_video.mp4
         infographic.png
@@ -142,13 +141,13 @@ ARTIFACTS: list[str] = [
     "infographic",
 ]
 
-# Extra download formats. Each listed format is saved as its own file next to
-# the default one (e.g. quiz.json + quiz.html + quiz.md). Downloads are free —
-# they don't touch the usage meter. Artifacts not listed get their single file.
+# Download formats. Each listed format is saved as its own file (e.g. adding
+# "html" to quiz saves quiz.json + quiz.html). Downloads are free — they don't
+# touch the usage meter. Artifacts not listed get their single default file.
 DOWNLOAD_FORMATS: dict[str, list[str]] = {
-    "quiz": ["json", "html", "markdown"],
-    "flashcards": ["json", "html", "markdown"],
-    "slide_deck": ["pdf", "pptx"],
+    "quiz": ["json"],
+    "flashcards": ["json"],
+    "slide_deck": ["pdf"],
 }
 FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "pptx": "pptx"}
 
@@ -156,7 +155,7 @@ FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "p
 # files. Each chapter folder also gets a local drive.json with every uploaded
 # file's id and share links, for the backend. Set DRIVE_EXTS to a set of
 # extensions (e.g. {".m4a", ".mp4", ".pdf"}) to upload only those; None = all.
-DRIVE_EXTS: set[str] | None = None
+DRIVE_EXTS: set[str] | None = {".json", ".m4a", ".mp4", ".pdf", ".png"}
 DRIVE_MANIFEST = "drive.json"
 
 # Defaults (overridable on the CLI).

@@ -118,7 +118,7 @@ pipeline/output/<Class>/<Subject>/<Chapter>/
     flashcards.json
     mind_map.json
     slides.pdf
-    audio.mp3
+    audio.m4a
     cinematic_video.mp4
     infographic.png
 ```

@@ -282,10 +282,10 @@ output/                                   Google Drive: My Drive / Lernoverse NC
     Chemistry/
       Chapter 1/
         source.pdf
-        quiz.json        quiz.html        quiz.md
-        flashcards.json  flashcards.html  flashcards.md
+        quiz.json
+        flashcards.json
         mind_map.json
-        slides.pdf       slides.pptx
+        slides.pdf
         audio.m4a                         # AAC in MP4 — not MP3
         cinematic_video.mp4
         infographic.png
@@ -316,8 +316,8 @@ Re-running is safe: records are matched on natural keys (class number, subject
 name, question text, card front…), so `_id`s never change; class/subject/book/
 chapter are only filled in on first creation, so edits made in the backend are
 kept. Pipeline-made resources carry `meta.source: "notebooklm-pipeline"`.
-Not saved (no place in the models): `slides.pptx` and the `.html` / `.md`
-exports — they're on Drive only. Bump `SCHEMA_VERSION` in `mongo_sync.py`
+Only `.json`, `.m4a`, `.mp4`, `.pdf` and `.png` files are downloaded and uploaded to
+Drive (`DOWNLOAD_FORMATS` / `DRIVE_EXTS` in `run.py`). Bump `SCHEMA_VERSION` in `mongo_sync.py`
 when changing the saved shapes, so every chapter re-syncs.
 
 ## Notes
