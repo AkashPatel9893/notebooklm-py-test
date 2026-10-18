@@ -50,6 +50,9 @@ PRIVACY_CHOICES = ("public", "unlisted", "private")
 PRIVACY = (os.getenv("YOUTUBE_PRIVACY") or "unlisted").strip().lower()
 CATEGORY_EDUCATION = "27"
 CHUNK = 8 * 1024 * 1024  # resumable-upload chunk size
+# Retries per chunk / request on network errors and 5xx, with exponential
+# backoff (~1 min total) — rides out a short connection drop mid-upload.
+RETRIES = 6
 
 
 class YouTubeNotConfigured(RuntimeError):
@@ -190,7 +193,7 @@ class YouTube:
         response = None
         try:
             while response is None:
-                status, response = req.next_chunk()
+                status, response = req.next_chunk(num_retries=RETRIES)
                 if status is not None and on_progress is not None:
                     on_progress(status.resumable_progress, total)
         except HttpError as e:
@@ -226,7 +229,7 @@ class YouTube:
             res = self.svc.videos().update(part="status", body={
                 "id": video_id,
                 "status": {"privacyStatus": PRIVACY, "selfDeclaredMadeForKids": False},
-            }).execute()
+            }).execute(num_retries=RETRIES)
         except HttpError as e:
             reason = _quota_reason(e)
             if reason:
