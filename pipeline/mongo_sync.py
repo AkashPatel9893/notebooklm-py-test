@@ -41,7 +41,7 @@ PIPELINE = "notebooklm-pipeline"
 SCHEMA_VERSION = "3"  # 3: multiple-choice quiz only, no infographic resource (2 saved both)
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
-CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json")
+CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
 
 C = {
     "class": "ncertclasses",
@@ -215,6 +215,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     quiz = convert_quiz(_load(cdir / "quiz.json") or {})
     cards = convert_flashcards(_load(cdir / "flashcards.json") or {})
     drive = _load(cdir / "drive.json") or {}
+    youtube = _load(cdir / "youtube.json") or {}
 
     class_no = _num(row["class"])
     chapter_no = _num(row["chapter"])
@@ -224,13 +225,22 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
 
     resources = []
     for fname, (rtype, label) in FILE_RESOURCES.items():
-        info = drive.get(fname)
+        info, yt = drive.get(fname), youtube.get(fname)
+        if not (info or yt):
+            continue
+        meta: dict[str, Any] = {"file": fname}
         if info:
-            resources.append((fname, rtype, f"{title} – {label}", info.get("preview_url"), {
-                "file": fname, "drive_file_id": info.get("id"), "view_url": info.get("view_url"),
-                "preview_url": info.get("preview_url"), "download_url": info.get("download_url"),
-                "size": info.get("size"), "mime": info.get("mime"),
-            }))
+            meta.update(drive_file_id=info.get("id"), view_url=info.get("view_url"),
+                        preview_url=info.get("preview_url"), download_url=info.get("download_url"),
+                        size=info.get("size"), mime=info.get("mime"))
+        url = info.get("preview_url") if info else None
+        if yt:
+            # Videos on YouTube: `url` is the embeddable YouTube player.
+            meta.update(youtube_id=yt.get("id"), youtube_url=yt.get("url"),
+                        youtube_embed_url=yt.get("embed_url"), youtube_privacy=yt.get("privacy"),
+                        size=yt.get("size"), mime="video/mp4")
+            url = yt.get("embed_url")
+        resources.append((fname, rtype, f"{title} – {label}", url, meta))
     if quiz:
         resources.append(("quiz", "quiz", f"{title} – Quiz", None, {"question_count": len(quiz)}))
     if cards:

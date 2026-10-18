@@ -52,6 +52,7 @@ import httpx
 from dotenv import load_dotenv
 import drive_upload
 import mongo_sync
+import youtube_upload
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -154,6 +155,18 @@ FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "p
 # extensions (e.g. {".m4a", ".mp4", ".pdf"}) to upload only those; None = all.
 DRIVE_EXTS: set[str] | None = {".json", ".m4a", ".mp4", ".pdf", ".png"}
 DRIVE_MANIFEST = "drive.json"
+
+# Videos go to YouTube instead of Drive (public/unlisted/private from
+# YOUTUBE_PRIVACY in .env); each chapter folder gets a local youtube.json with
+# every video's id and links, and MongoDB saves them on the matching resource.
+# Without a YouTube sign-in (or with --no-youtube) they go to Drive as before.
+# Each upload costs ~1,600 of the 10,000 daily API quota units, so only list
+# files worth that.
+YOUTUBE_FILES: dict[str, str] = {
+    "video.mp4": "Video Overview",
+    "cinematic_video.mp4": "Cinematic Video",
+}
+YOUTUBE_MANIFEST = "youtube.json"
 
 # Defaults (overridable on the CLI).
 DEFAULT_CONCURRENCY = 3          # chapters generated in parallel
@@ -1065,12 +1078,20 @@ async def generate_row(
 # --------------------------------------------------------------------------- #
 
 
+# True when videos go to YouTube, so Drive leaves them out (re-set per run by
+# use_youtube; the default keeps `status` consistent with what runs upload).
+VIDEOS_ON_YOUTUBE = youtube_upload.configured()
+
+
 def drive_files(cdir: Path) -> list[Path]:
     if not cdir.is_dir():
         return []
+    skip = {DRIVE_MANIFEST, YOUTUBE_MANIFEST, mongo_sync.MARKER}
+    if VIDEOS_ON_YOUTUBE:
+        skip |= set(YOUTUBE_FILES)
     return sorted(f for f in cdir.iterdir()
                   if f.is_file() and not f.name.startswith(".")
-                  and f.name not in (DRIVE_MANIFEST, mongo_sync.MARKER)
+                  and f.name not in skip
                   and (DRIVE_EXTS is None or f.suffix.lower() in DRIVE_EXTS))
 
 
@@ -1203,6 +1224,147 @@ class DriveSync:
 DRIVE = DriveSync(enabled=False)  # replaced per run by the phase functions
 
 
+def load_youtube_manifest(cdir: Path) -> dict[str, Any]:
+    try:
+        return json.loads((cdir / YOUTUBE_MANIFEST).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def youtube_pending(cdir: Path) -> list[Path]:
+    """Videos to upload, or whose privacy no longer matches YOUTUBE_PRIVACY."""
+    manifest = load_youtube_manifest(cdir)
+    return [cdir / n for n in YOUTUBE_FILES
+            if (cdir / n).is_file() and (
+                not _in_sync(manifest.get(n), cdir / n)
+                or manifest[n].get("requested_privacy") != youtube_upload.PRIVACY)]
+
+
+def use_youtube(enabled: bool) -> "YouTubeSync":
+    """YouTube stage for this run; while it's on, videos skip Drive."""
+    global VIDEOS_ON_YOUTUBE
+    if enabled:
+        try:
+            youtube_upload.check_privacy()
+        except youtube_upload.YouTubeNotConfigured as e:
+            log.error("%s", e)
+            sys.exit(2)
+    VIDEOS_ON_YOUTUBE = enabled and youtube_upload.configured()
+    if enabled and not VIDEOS_ON_YOUTUBE:
+        log.warning("YouTube isn't signed in (`python run.py youtube-login`) — "
+                    "videos go to Drive instead")
+    return YouTubeSync(VIDEOS_ON_YOUTUBE)
+
+
+class YouTubeSync:
+    """Uploads a chapter's videos to YouTube, one at a time.
+
+    Disabled (with one warning) when YouTube isn't set up, and for the rest of
+    the run once the daily quota runs out, so the rest of the pipeline keeps
+    working. Uploads are serialised and run in a worker thread.
+    """
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.lock = asyncio.Lock()
+        self.yt: youtube_upload.YouTube | None = None
+        self.progress = Progress(
+            TextColumn("[red]▶[/] {task.description}", markup=True),
+            BarColumn(bar_width=30),
+            TextColumn("{task.percentage:>5.1f}%"),
+            DownloadColumn(binary_units=True),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True,
+        )
+
+    async def _client(self) -> youtube_upload.YouTube | None:
+        if not self.enabled:
+            return None
+        if self.yt is None:
+            try:
+                self.yt = await asyncio.to_thread(youtube_upload.YouTube)
+            except Exception as e:  # noqa: BLE001 — YouTube is optional
+                self.enabled = False
+                log.warning("YouTube upload is OFF — %s", e)
+                return None
+        return self.yt
+
+    async def sync_chapter(self, row: dict[str, str], key: str) -> None:
+        """Upload any new/changed videos in this chapter's folder. Never raises."""
+        cdir = chapter_dir(row)
+        pending = youtube_pending(cdir)
+        if not pending:
+            return
+        yt = await self._client()
+        if yt is None:
+            return
+        manifest = load_youtube_manifest(cdir)
+        place = f"{row['class']} · {row['subject']} · {row['chapter']}"
+        chapter = (row.get("chapter_title") or "").strip() or place
+        for f in pending:
+            md5 = await asyncio.to_thread(drive_upload.file_md5, f)
+            old = manifest.get(f.name)
+            sent = changed = False
+            if old and old.get("md5") == md5:
+                # Same video, only touched on disk — never spend quota on it twice.
+                old.update(size=f.stat().st_size, mtime=f.stat().st_mtime)
+                info = old
+                if old.get("requested_privacy") != youtube_upload.PRIVACY:
+                    async with self.lock:
+                        if not self.enabled:
+                            return
+                        try:
+                            applied = await asyncio.to_thread(yt.set_privacy, old["id"])
+                        except youtube_upload.QuotaExceeded as e:
+                            self.enabled = False
+                            log.warning("YouTube upload is OFF for this run — %s", e)
+                            return
+                        except Exception as e:  # noqa: BLE001 — retried on the next sync
+                            log.error("[%s] youtube privacy %s FAILED: %s", key, f.name, e)
+                            continue
+                    old.update(requested_privacy=youtube_upload.PRIVACY, privacy=applied)
+                    changed = True
+            else:
+                async with self.lock:
+                    if not self.enabled:  # quota ran out on another chapter meanwhile
+                        return
+                    if not self.progress.live.is_started:
+                        self.progress.start()
+                    task = self.progress.add_task(f"{short_key(key)} · {f.name}",
+                                                  total=f.stat().st_size or 1)
+                    try:
+                        info = await asyncio.to_thread(
+                            yt.upload, f, f"{chapter} – {YOUTUBE_FILES[f.name]}",
+                            f"{YOUTUBE_FILES[f.name]} for NCERT {place}: {chapter}.", md5,
+                            lambda sent_b, _t: self.progress.update(task, completed=sent_b))
+                    except youtube_upload.QuotaExceeded as e:
+                        self.enabled = False
+                        log.warning("YouTube upload is OFF for this run — %s", e)
+                        return
+                    except Exception as e:  # noqa: BLE001 — retried on the next sync
+                        log.error("[%s] youtube upload %s FAILED: %s", key, f.name, e)
+                        continue
+                    finally:
+                        self.progress.remove_task(task)
+                        if not self.progress.tasks:
+                            self.progress.stop()
+                sent = changed = True
+            manifest[f.name] = info
+            tmp = cdir / f".{YOUTUBE_MANIFEST}.tmp"
+            tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            os.replace(tmp, cdir / YOUTUBE_MANIFEST)
+            if changed:
+                note = "" if info["privacy"] == youtube_upload.PRIVACY else \
+                    f" — YouTube kept it {info['privacy']} (API project not audited yet)"
+                what = "on YouTube" if sent else f"now {youtube_upload.PRIVACY} on YouTube"
+                log.info("[%s] ▶ %s %s: %s%s done", key, f.name, what, info["url"], note)
+
+
+YOUTUBE = YouTubeSync(enabled=False)
+
+
 class MongoSync:
     """Writes a chapter into the phoenix MongoDB once its content changes.
 
@@ -1248,13 +1410,15 @@ MONGO = MongoSync(enabled=False)
 
 
 async def sync_backends(row: dict[str, str], key: str) -> None:
-    """After local files change: mirror to Drive, then save to MongoDB (it needs Drive links)."""
+    """After local files change: Drive, YouTube, then MongoDB (it saves their links)."""
     await DRIVE.sync_chapter(row, key)
+    await YOUTUBE.sync_chapter(row, key)
     await MONGO.sync_chapter(row, key)
 
 
 async def phase_generate(args: argparse.Namespace) -> None:
-    global DRIVE, MONGO
+    global DRIVE, YOUTUBE, MONGO
+    YOUTUBE = use_youtube(args.youtube)
     DRIVE = DriveSync(args.drive)
     MONGO = MongoSync(args.mongo)
     active = parse_artifacts(args.artifacts)
@@ -1428,7 +1592,8 @@ async def download_row(
 
 
 async def phase_download(args: argparse.Namespace) -> None:
-    global DRIVE, MONGO
+    global DRIVE, YOUTUBE, MONGO
+    YOUTUBE = use_youtube(args.youtube)
     DRIVE = DriveSync(args.drive)
     MONGO = MongoSync(args.mongo)
     active = parse_artifacts(args.artifacts)
@@ -1553,6 +1718,8 @@ ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
     ("GOOGLE_DRIVE_CLIENT_SECRET", True, True),
     ("GOOGLE_DRIVE_REFRESH_TOKEN", False, True),
     ("DRIVE_ROOT_FOLDER", False, False),
+    ("YOUTUBE_REFRESH_TOKEN", False, True),
+    ("YOUTUBE_PRIVACY", False, False),
     ("MONGODB_URI", True, True),
     ("MONGODB_DB", False, False),
 ]
@@ -1603,6 +1770,15 @@ async def cmd_check(_: argparse.Namespace) -> None:
             ok, f"  ({about['user']['emailAddress']}, folder \"{drive_upload.ROOT_FOLDER}\")"))
     except Exception as e:  # noqa: BLE001
         checks.add_row("Google Drive", bad(str(e)))
+
+    # YouTube
+    try:
+        yt = await asyncio.to_thread(youtube_upload.YouTube)
+        channel = await asyncio.to_thread(yt.channel_title)
+        checks.add_row("YouTube", Text.assemble(
+            ok, f"  (channel \"{channel}\", uploads {youtube_upload.PRIVACY})"))
+    except Exception as e:  # noqa: BLE001
+        checks.add_row("YouTube", bad(str(e)))
 
     # MongoDB
     try:
@@ -1661,8 +1837,9 @@ def cmd_drive_login(_: argparse.Namespace) -> None:
 
 
 async def cmd_drive(_: argparse.Namespace) -> None:
-    global DRIVE
+    global DRIVE, VIDEOS_ON_YOUTUBE
     DRIVE = DriveSync(True)
+    VIDEOS_ON_YOUTUBE = youtube_upload.configured()
     store = Store()
     store.load()
     pending: list[Path] = []
@@ -1685,12 +1862,38 @@ async def cmd_drive(_: argparse.Namespace) -> None:
     summarize(store)
 
 
+def cmd_youtube_login(_: argparse.Namespace) -> None:
+    try:
+        youtube_upload.login()
+    except youtube_upload.YouTubeNotConfigured as e:
+        log.error("%s", e)
+        sys.exit(1)
+    log.info("YouTube sign-in saved to %s done", youtube_upload.TOKEN_FILE.name)
+
+
+async def cmd_youtube(_: argparse.Namespace) -> None:
+    global YOUTUBE
+    YOUTUBE = use_youtube(True)
+    if not YOUTUBE.enabled:
+        return
+    store = Store()
+    store.load()
+    pending = sum(len(youtube_pending(chapter_dir(r))) for r in store.rows.values())
+    if not pending:
+        log.info("YouTube is up to date — nothing to upload")
+        return
+    log.info("syncing %d video(s) to YouTube (%s)", pending, youtube_upload.PRIVACY)
+    for row in store.rows.values():
+        await YOUTUBE.sync_chapter(row, row_key(row))
+
+
 async def cmd_upload(ns: argparse.Namespace) -> None:
-    """Drive first, then MongoDB — the Mongo documents carry the Drive links."""
+    """Drive and YouTube first, then MongoDB — the Mongo documents carry their links."""
     if ns.dry_run:
-        log.info("dry run — skipping the Drive upload")
+        log.info("dry run — skipping the Drive and YouTube uploads")
     else:
         await cmd_drive(ns)
+        await cmd_youtube(ns)
     await cmd_mongo(ns)
 
 
@@ -1732,6 +1935,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--drive", action=argparse.BooleanOptionalAction, default=True,
                    help="mirror every saved file to Google Drive as it is saved "
                         "(default on; skipped with a warning until `drive-login` is done)")
+    p.add_argument("--youtube", action=argparse.BooleanOptionalAction, default=True,
+                   help="upload each video to YouTube instead of Drive as it is saved "
+                        "(default on; videos go to Drive until `youtube-login` is done)")
     p.add_argument("--mongo", action=argparse.BooleanOptionalAction, default=True,
                    help="save each chapter to the phoenix MongoDB when its content changes "
                         "(default on; needs MONGODB_URI in .env)")
@@ -1903,14 +2109,14 @@ def main() -> None:
 
     sub.add_parser("sync", help="pull sheet into progress.csv").set_defaults(fn=cmd_sync)
     sub.add_parser("status", help="print progress summary").set_defaults(fn=cmd_status)
-    sub.add_parser("check", help="verify .env + NotebookLM, Drive and MongoDB access").set_defaults(
+    sub.add_parser("check", help="verify .env + NotebookLM, Drive, YouTube and MongoDB access").set_defaults(
         fn=lambda ns: asyncio.run(cmd_check(ns)))
     m = sub.add_parser("mongo", help="save generated content to the phoenix MongoDB")
     m.add_argument("--dry-run", action="store_true", help="show what would be saved, write nothing")
     m.add_argument("--force", action="store_true", help="re-save chapters even if unchanged")
     m.set_defaults(fn=lambda ns: asyncio.run(cmd_mongo(ns)))
-    u = sub.add_parser("upload", help="upload output/ to Drive, then save to MongoDB "
-                                      "(`drive` + `mongo` in one go)")
+    u = sub.add_parser("upload", help="upload output/ to Drive and YouTube, then save to "
+                                      "MongoDB (`drive` + `youtube` + `mongo` in one go)")
     u.add_argument("--dry-run", action="store_true",
                    help="upload nothing; show what would be saved to MongoDB")
     u.add_argument("--force", action="store_true",
@@ -1920,6 +2126,10 @@ def main() -> None:
         fn=cmd_drive_login)
     sub.add_parser("drive", help="upload any local output file not yet on Drive").set_defaults(
         fn=lambda ns: asyncio.run(cmd_drive(ns)))
+    sub.add_parser("youtube-login", help="sign in to YouTube (one time)").set_defaults(
+        fn=cmd_youtube_login)
+    sub.add_parser("youtube", help="upload any local video not yet on YouTube").set_defaults(
+        fn=lambda ns: asyncio.run(cmd_youtube(ns)))
 
     def locked(coro_factory: Callable[[argparse.Namespace], Awaitable[None]]):
         """Run an async phase under the single-run lock."""

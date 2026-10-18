@@ -112,13 +112,14 @@ Anything marked ✗ says what to fix. Common ones:
 
 ## Credentials
 
-The pipeline uses **three separate credentials**. None of them are committed to
+The pipeline uses **four separate credentials**. None of them are committed to
 git.
 
 | What | Used for | Where it lives | How you set it up |
 |------|----------|----------------|-------------------|
 | NotebookLM sign-in | creating notebooks + generating artifacts | `~/.notebooklm/profiles/default/storage_state.json` | `notebooklm login` |
 | Google Drive (OAuth) | uploading `output/` to Drive | `pipeline/.env` + `pipeline/.drive_token.json` | Google Cloud Console → `.env` → `python run.py drive-login` |
+| YouTube (OAuth) | uploading videos to YouTube | `pipeline/.env` + `pipeline/.youtube_token.json` | same OAuth client as Drive → `python run.py youtube-login` ([steps](#3-youtube)) |
 | MongoDB | saving content for the phoenix backend | `pipeline/.env` | copy `MONGODB_URI` from `Lernoverse/phoenix/.env` |
 
 ### 1. NotebookLM sign-in
@@ -194,7 +195,48 @@ pipeline then signs in from `.env` alone and writes nothing to disk.
 If Drive isn't set up, uploads are skipped with a single warning — generation
 and local downloads are unaffected.
 
-### 3. MongoDB
+### 3. YouTube
+
+`video.mp4` and `cinematic_video.mp4` (the `YOUTUBE_FILES` list in `run.py`)
+are uploaded to YouTube **instead of Drive** as soon as they're saved, and
+their links are written to `youtube.json` and to MongoDB. Until you've run
+`youtube-login` (or with `--no-youtube`) they go to Drive as before. It reuses
+the Drive OAuth client:
+
+1. Cloud Console (same project) → **APIs & Services → Library** → enable
+   **YouTube Data API v3**.
+2. **OAuth consent screen → Scopes** → add `.../auth/youtube` (needed to change
+   an uploaded video's privacy; `youtube.upload` alone can't). In *Testing* mode, add the channel's account
+   as a test user.
+3. Sign in with the Google account **that owns the YouTube channel**:
+
+```bash
+python run.py youtube-login               # token → pipeline/.youtube_token.json
+python run.py check                       # shows the channel name
+python run.py youtube                     # uploads videos already in output/
+```
+
+For a machine without a browser, copy `refresh_token` from
+`.youtube_token.json` into `.env` as `YOUTUBE_REFRESH_TOKEN`.
+`YOUTUBE_PRIVACY` sets `public`, `unlisted` (default) or `private`. Change it
+and the next run (or `python run.py youtube`) switches every video already
+uploaded to the new setting too (~50 quota units each). Any other value stops
+the run with an error.
+
+> **Uploads are private until Google audits the API project.** For any project
+> created after July 2020, YouTube locks API uploads to *private* no matter
+> what `YOUTUBE_PRIVACY` says; the log says so after each upload. Apply via
+> Google's *YouTube API Services audit and quota extension* form.
+>
+> **About 6 uploads a day.** Each upload costs ~1,600 of the default 10,000
+> daily quota units. When it runs out, YouTube uploads stop for the rest of the
+> run and resume on the next one (the same form raises the quota).
+>
+> Videos longer than 15 minutes need a phone-verified channel
+> (youtube.com/verify). A changed local video becomes a *new* YouTube video —
+> YouTube can't replace media — but an identical file is never sent twice.
+
+### 4. MongoDB
 
 The pipeline writes to the **same database as the phoenix backend**:
 
@@ -213,6 +255,7 @@ treat `pipeline/.env` like any other secret.
 | `pipeline/.env.example` | ✅ yes | every setting, documented, **no values** |
 | `pipeline/.env` | ❌ ignored | your real client ID/secret, Mongo URI |
 | `pipeline/.drive_token.json` | ❌ ignored | Drive sign-in (refresh token) |
+| `pipeline/.youtube_token.json` | ❌ ignored | YouTube sign-in (refresh token) |
 | `pipeline/client_secret.json` | ❌ ignored | optional: the downloaded OAuth JSON, used if `.env` has no client ID |
 | `~/.notebooklm/` | outside repo | NotebookLM session |
 
@@ -228,14 +271,16 @@ cd pipeline
 python run.py sync          # pull the sheet → progress.csv (adds new rows)
 python run.py generate      # PDFs → notebooks → artifacts; downloads + Drive upload as each finishes
 python run.py download      # catch-up / repair pass: fetch anything missing or broken
-python run.py upload        # Drive upload, then MongoDB save — both in one go
+python run.py upload        # Drive + YouTube upload, then MongoDB save — all in one go
 python run.py drive         # only: upload anything in output/ not yet on Drive
+python run.py youtube       # only: upload any video not yet on YouTube
 python run.py mongo         # save content to the phoenix MongoDB (--dry-run to preview)
 python run.py titles        # ask each notebook for the chapter's real name → chapter_title column
 python run.py status        # progress table
-python run.py check         # verify .env + NotebookLM / Drive / MongoDB access
+python run.py check         # verify .env + NotebookLM / Drive / YouTube / MongoDB access
 python run.py all           # generate then download
 python run.py drive-login   # one-time Drive sign-in
+python run.py youtube-login # one-time YouTube sign-in
 ```
 
 Useful flags on `generate` / `download` / `all`:
@@ -249,6 +294,7 @@ Useful flags on `generate` / `download` / `all`:
 | `--artifacts a,b` | override which artifacts to make (default: `quiz,flashcards,mind_map,slide_deck,audio,cinematic_video,infographic`) |
 | `--no-download-now` | during `generate`, don't download each artifact as it finishes |
 | `--no-drive` | skip Google Drive uploads for this run |
+| `--no-youtube` | skip YouTube uploads for this run |
 | `--no-mongo` | skip saving to MongoDB for this run |
 | `--usage-every SECONDS` | how often to re-print the live usage tables (default 120; `0` = off) |
 | `-v` (before the command) | also show library + HTTP logs on the console |
@@ -290,6 +336,7 @@ output/                                   Google Drive: My Drive / Lernoverse NC
         cinematic_video.mp4
         infographic.png
         drive.json                        # local only: Drive id + links per file
+        youtube.json                      # local only: YouTube id + links per video
         mongo.json                        # local only: last MongoDB save (chapter _id, counts)
 ```
 
@@ -297,7 +344,10 @@ Extra formats are set by `DOWNLOAD_FORMATS` at the top of `run.py`; which files
 go to Drive by `DRIVE_EXTS` (default: all). `drive.json` holds, per file,
 `view_url` (open in browser), `preview_url` (embed in an `<iframe>` — use this
 for audio/video in the app) and `download_url` (raw file; unreliable for large
-files).
+files). `youtube.json` holds, per video, `url` (youtu.be link), `embed_url`
+(for an `<iframe>`) and `privacy` (what YouTube actually applied). MongoDB saves
+them on the video resource: `url` is the YouTube `embed_url`, plus
+`meta.youtube_url`, `meta.youtube_id` and `meta.youtube_privacy`.
 
 ## MongoDB (phoenix backend)
 

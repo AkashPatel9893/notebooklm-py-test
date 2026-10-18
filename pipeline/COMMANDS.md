@@ -186,6 +186,19 @@ python run.py drive
 
 Turn it off for one run with `--no-drive`.
 
+**YouTube** (videos only; same OAuth client — enable *YouTube Data API v3* first):
+
+```bash
+python run.py youtube-login     # sign in with the account that owns the channel
+python run.py youtube           # upload videos already on disk / retry failed ones
+```
+
+Once signed in, videos go to YouTube **instead of** Drive. `YOUTUBE_PRIVACY` in
+`.env` (`public` / `unlisted` / `private`) controls every video — change it and
+re-run `python run.py youtube` to update the ones already uploaded. Turn YouTube
+off for one run with `--no-youtube` (videos then go to Drive). Uploads stay
+private until Google audits the API project; the free quota allows ~6 a day.
+
 > While the OAuth app is in *Testing* mode, Google expires the sign-in after
 > 7 days — just run `python run.py drive-login` again when the log says so.
 
