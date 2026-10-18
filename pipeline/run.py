@@ -27,6 +27,7 @@ Phase 2 downloads every completed artifact into:
         mind_map.json
         slides.pdf
         audio.m4a
+        audio_video.mp4       (audio over a title card, only for YouTube)
         cinematic_video.mp4
         infographic.png
 
@@ -50,6 +51,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 from dotenv import load_dotenv
+import audio_video
 import drive_upload
 import mongo_sync
 import youtube_upload
@@ -165,8 +167,58 @@ DRIVE_MANIFEST = "drive.json"
 YOUTUBE_FILES: dict[str, str] = {
     "video.mp4": "Video Overview",
     "cinematic_video.mp4": "Cinematic Video",
+    # audio.m4a over a title card (audio_video.py) — YouTube won't take audio
+    # alone. Built only for YouTube; audio.m4a itself still goes to Drive.
+    audio_video.VIDEO: "Audio Overview",
 }
 YOUTUBE_MANIFEST = "youtube.json"
+
+
+# Title suffix telling a chapter's videos apart in the channel's list.
+YOUTUBE_LABELS = {"Video Overview": "Video", "Cinematic Video": "Cinematic",
+                  "Audio Overview": "Audio"}
+
+
+def youtube_playlist(row: dict[str, str]) -> tuple[str, str]:
+    """Title and description of the class+subject playlist a chapter's videos go in."""
+    cls, subj = row["class"].strip(), row["subject"].strip()
+    return (f"NCERT {cls} {subj}",
+            f"Chapter-wise audio and video overviews for NCERT {cls} {subj}.")
+
+
+def youtube_meta(row: dict[str, str], kind: str) -> tuple[str, str, list[str]]:
+    """Title, description and tags for one chapter video.
+
+    Title is the chapter title plus where it sits and what it is ("… | Class 11
+    · Chemistry · Chapter 1 (Audio)"), shortened to fit YouTube's 100
+    characters. The description adds the book and the NCERT links.
+    """
+    cls, subj, ch = row["class"].strip(), row["subject"].strip(), row["chapter"].strip()
+    book = (row.get("book") or "").strip()
+    name = (row.get("chapter_title") or "").strip()
+    label = f" ({YOUTUBE_LABELS.get(kind, kind)})"
+    place = f"{cls} · {subj} · {ch}"
+    ch_no = re.sub(r"\D", "", ch) or ch
+    short = f"{cls} {subj} Ch {ch_no}"
+    title = next((t for t in (f"{name} | {place}{label}", f"{name} | {short}{label}",
+                              f"{name}{label}") if len(t) <= 100),
+                 name) if name else place + label
+    lines = [f"{name} — {kind}" if name else kind, "",
+             f"Class: {cls}", f"Subject: {subj}"]
+    if book and book != subj:
+        lines.append(f"Book: {book}")
+    lines.append(f"Chapter: {ch}" + (f" — {name}" if name else ""))
+    links = [("📖 Read the chapter (NCERT PDF): ", row.get("pdf_url")),
+             ("📚 Book contents: ", row.get("book_index_url"))]
+    if any(u for _, u in links):
+        lines.append("")
+        lines += [t + u.strip() for t, u in links if u and u.strip()]
+    lines += ["", " ".join(dict.fromkeys(
+        "#" + re.sub(r"\W", "", "".join(w[:1].upper() + w[1:] for w in t.split()))
+        for t in ("NCERT", cls, subj, book, name) if t))]
+    tags = [t for t in dict.fromkeys(["NCERT", cls, subj, book, ch, name, kind,
+                                      f"NCERT {cls} {subj}"]) if t]
+    return title, "\n".join(lines), tags
 
 # Defaults (overridable on the CLI).
 DEFAULT_CONCURRENCY = 3          # chapters generated in parallel
@@ -1086,7 +1138,7 @@ VIDEOS_ON_YOUTUBE = youtube_upload.configured()
 def drive_files(cdir: Path) -> list[Path]:
     if not cdir.is_dir():
         return []
-    skip = {DRIVE_MANIFEST, YOUTUBE_MANIFEST, mongo_sync.MARKER}
+    skip = {DRIVE_MANIFEST, YOUTUBE_MANIFEST, mongo_sync.MARKER, audio_video.VIDEO}
     if VIDEOS_ON_YOUTUBE:
         skip |= set(YOUTUBE_FILES)
     return sorted(f for f in cdir.iterdir()
@@ -1232,12 +1284,38 @@ def load_youtube_manifest(cdir: Path) -> dict[str, Any]:
 
 
 def youtube_pending(cdir: Path) -> list[Path]:
-    """Videos to upload, or whose privacy no longer matches YOUTUBE_PRIVACY."""
+    """Videos to upload, whose privacy no longer matches YOUTUBE_PRIVACY, or
+    that aren't in their playlist yet.
+
+    Includes audio_video.mp4 when it still has to be built from audio.m4a.
+    """
     manifest = load_youtube_manifest(cdir)
     return [cdir / n for n in YOUTUBE_FILES
-            if (cdir / n).is_file() and (
-                not _in_sync(manifest.get(n), cdir / n)
-                or manifest[n].get("requested_privacy") != youtube_upload.PRIVACY)]
+            if (n == audio_video.VIDEO and audio_video.stale(cdir)) or (
+                (cdir / n).is_file() and (
+                    not _in_sync(manifest.get(n), cdir / n)
+                    or manifest[n].get("requested_privacy") != youtube_upload.PRIVACY
+                    or not manifest[n].get("playlist_id")))]
+
+
+# Tries per YouTube call within one run (network drops, 5xx) before leaving
+# it for the next run; waits 30s, 60s, … between them.
+YOUTUBE_ATTEMPTS = max(1, int(os.getenv("YOUTUBE_ATTEMPTS") or 3))
+YOUTUBE_RETRY_WAIT = 30.0
+
+
+def youtube_quota_line() -> Text:
+    """'YouTube quota  3,250/10,000 today · ~4 uploads left · resets 12:30 IST · in 5h'.
+
+    Counted by this pipeline (youtube_upload.quota) — the API doesn't report it.
+    """
+    q = youtube_upload.quota()
+    style = "green" if q["uploads_left"] >= 2 else "yellow" if q["uploads_left"] else "red"
+    return Text.assemble(
+        ("YouTube quota  ", "bold"),
+        (f"{q['used']:,}/{q['limit']:,}", style), " today · ",
+        (f"~{q['uploads_left']} upload{'s' * (q['uploads_left'] != 1)} left", style),
+        f" · resets {_reset_label(q['resets_at'])}")
 
 
 def use_youtube(enabled: bool) -> "YouTubeSync":
@@ -1291,6 +1369,30 @@ class YouTubeSync:
                 return None
         return self.yt
 
+    async def _call(self, key: str, what: str, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run one YouTube call in a thread, retrying network/5xx failures with backoff.
+
+        QuotaExceeded switches YouTube off for the run (logging when it resets)
+        and is re-raised; anything else is re-raised after the last attempt.
+        """
+        for attempt in range(1, YOUTUBE_ATTEMPTS + 1):
+            try:
+                return await asyncio.to_thread(fn, *args)
+            except youtube_upload.QuotaExceeded as e:
+                self.enabled = False
+                q = youtube_upload.quota()
+                log.warning("YouTube upload is OFF for this run — %s (quota resets %s)",
+                            e, _reset_label(q["resets_at"]))
+                raise
+            except Exception as e:  # noqa: BLE001
+                if attempt == YOUTUBE_ATTEMPTS or not youtube_upload.retryable(e):
+                    raise
+                wait = YOUTUBE_RETRY_WAIT * 2 ** (attempt - 1)
+                log.warning("[%s] youtube %s failed (%s) — retry %d/%d in %ds",
+                            key, what, e, attempt, YOUTUBE_ATTEMPTS - 1, wait)
+                await asyncio.sleep(wait)
+        raise AssertionError("unreachable")
+
     async def sync_chapter(self, row: dict[str, str], key: str) -> None:
         """Upload any new/changed videos in this chapter's folder. Never raises."""
         cdir = chapter_dir(row)
@@ -1303,6 +1405,14 @@ class YouTubeSync:
         manifest = load_youtube_manifest(cdir)
         place = f"{row['class']} · {row['subject']} · {row['chapter']}"
         chapter = (row.get("chapter_title") or "").strip() or place
+        if audio_video.stale(cdir):
+            try:
+                await asyncio.to_thread(audio_video.make, cdir, chapter, f"NCERT {place}")
+                log.info("[%s] 🎞 %s built from %s done", key, audio_video.VIDEO, audio_video.AUDIO)
+            except Exception as e:  # noqa: BLE001 — retried on the next sync
+                log.error("[%s] %s FAILED: %s", key, audio_video.VIDEO, e)
+                pending = [f for f in pending if f.name != audio_video.VIDEO]
+        spent = False  # any quota used for this chapter → show what's left
         for f in pending:
             md5 = await asyncio.to_thread(drive_upload.file_md5, f)
             old = manifest.get(f.name)
@@ -1316,10 +1426,9 @@ class YouTubeSync:
                         if not self.enabled:
                             return
                         try:
-                            applied = await asyncio.to_thread(yt.set_privacy, old["id"])
-                        except youtube_upload.QuotaExceeded as e:
-                            self.enabled = False
-                            log.warning("YouTube upload is OFF for this run — %s", e)
+                            applied = await self._call(key, f"privacy {f.name}",
+                                                       yt.set_privacy, old["id"])
+                        except youtube_upload.QuotaExceeded:
                             return
                         except Exception as e:  # noqa: BLE001 — retried on the next sync
                             log.error("[%s] youtube privacy %s FAILED: %s", key, f.name, e)
@@ -1335,13 +1444,12 @@ class YouTubeSync:
                     task = self.progress.add_task(f"{short_key(key)} · {f.name}",
                                                   total=f.stat().st_size or 1)
                     try:
-                        info = await asyncio.to_thread(
-                            yt.upload, f, f"{chapter} – {YOUTUBE_FILES[f.name]}",
-                            f"{YOUTUBE_FILES[f.name]} for NCERT {place}: {chapter}.", md5,
-                            lambda sent_b, _t: self.progress.update(task, completed=sent_b))
-                    except youtube_upload.QuotaExceeded as e:
-                        self.enabled = False
-                        log.warning("YouTube upload is OFF for this run — %s", e)
+                        title, desc, tags = youtube_meta(row, YOUTUBE_FILES[f.name])
+                        info = await self._call(
+                            key, f"upload {f.name}", yt.upload, f, title, desc, md5,
+                            lambda sent_b, _t: self.progress.update(task, completed=sent_b),
+                            tags)
+                    except youtube_upload.QuotaExceeded:
                         return
                     except Exception as e:  # noqa: BLE001 — retried on the next sync
                         log.error("[%s] youtube upload %s FAILED: %s", key, f.name, e)
@@ -1351,15 +1459,34 @@ class YouTubeSync:
                         if not self.progress.tasks:
                             self.progress.stop()
                 sent = changed = True
+            if not info.get("playlist_id"):
+                async with self.lock:
+                    if not self.enabled:
+                        return
+                    try:
+                        pid = await self._call(key, f"playlist {f.name}", yt.add_to_playlist,
+                                               info["id"], *youtube_playlist(row))
+                    except youtube_upload.QuotaExceeded:
+                        pid = None
+                    except Exception as e:  # noqa: BLE001 — retried on the next sync
+                        log.error("[%s] youtube playlist %s FAILED: %s", key, f.name, e)
+                        pid = None
+                if pid:
+                    info["playlist_id"] = pid
+                    log.info("[%s] ▶ %s added to playlist \"%s\" done",
+                             key, f.name, youtube_playlist(row)[0])
             manifest[f.name] = info
             tmp = cdir / f".{YOUTUBE_MANIFEST}.tmp"
             tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             os.replace(tmp, cdir / YOUTUBE_MANIFEST)
+            spent = spent or changed or bool(info.get("playlist_id"))
             if changed:
                 note = "" if info["privacy"] == youtube_upload.PRIVACY else \
                     f" — YouTube kept it {info['privacy']} (API project not audited yet)"
                 what = "on YouTube" if sent else f"now {youtube_upload.PRIVACY} on YouTube"
                 log.info("[%s] ▶ %s %s: %s%s done", key, f.name, what, info["url"], note)
+        if spent:
+            console.print(youtube_quota_line())
 
 
 YOUTUBE = YouTubeSync(enabled=False)
@@ -1710,6 +1837,8 @@ def summarize(store: Store) -> None:
                      "   [bright_black]· not yet[/]\n"
                      + "  ".join(f"{k}={v}" for k, v in counts.items()))
     show_table(table, plain)
+    if youtube_upload.configured():
+        console.print(youtube_quota_line())
 
 
 ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
@@ -1720,6 +1849,8 @@ ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
     ("DRIVE_ROOT_FOLDER", False, False),
     ("YOUTUBE_REFRESH_TOKEN", False, True),
     ("YOUTUBE_PRIVACY", False, False),
+    ("YOUTUBE_DAILY_QUOTA", False, False),
+    ("YOUTUBE_ATTEMPTS", False, False),
     ("MONGODB_URI", True, True),
     ("MONGODB_DB", False, False),
 ]
@@ -1777,6 +1908,7 @@ async def cmd_check(_: argparse.Namespace) -> None:
         channel = await asyncio.to_thread(yt.channel_title)
         checks.add_row("YouTube", Text.assemble(
             ok, f"  (channel \"{channel}\", uploads {youtube_upload.PRIVACY})"))
+        checks.add_row("", youtube_quota_line())
     except Exception as e:  # noqa: BLE001
         checks.add_row("YouTube", bad(str(e)))
 
@@ -1883,6 +2015,7 @@ async def cmd_youtube(_: argparse.Namespace) -> None:
         log.info("YouTube is up to date — nothing to upload")
         return
     log.info("syncing %d video(s) to YouTube (%s)", pending, youtube_upload.PRIVACY)
+    console.print(youtube_quota_line())
     for row in store.rows.values():
         await YOUTUBE.sync_chapter(row, row_key(row))
 

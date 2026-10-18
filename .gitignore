@@ -62,3 +62,5 @@ pipeline/.pipeline.lock
 pipeline/client_secret.json
 pipeline/.drive_token.json
 pipeline/.youtube_token.json
+pipeline/.youtube_playlists.json
+pipeline/.youtube_quota.json

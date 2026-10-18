@@ -4,3 +4,4 @@ google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 python-dotenv>=1.0
 pymongo>=4.6
+pillow>=10.1  # audio_video.py title card

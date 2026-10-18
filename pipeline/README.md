@@ -200,8 +200,32 @@ and local downloads are unaffected.
 `video.mp4` and `cinematic_video.mp4` (the `YOUTUBE_FILES` list in `run.py`)
 are uploaded to YouTube **instead of Drive** as soon as they're saved, and
 their links are written to `youtube.json` and to MongoDB. Until you've run
-`youtube-login` (or with `--no-youtube`) they go to Drive as before. It reuses
-the Drive OAuth client:
+`youtube-login` (or with `--no-youtube`) they go to Drive as before.
+The audio overview goes too: YouTube won't take audio alone, so `audio.m4a`
+is turned into `audio_video.mp4` (the audio over a generated title card, see
+`audio_video.py`; needs `ffmpeg` and Pillow). `audio.m4a` itself still goes to
+Drive, and MongoDB's audio resource keeps its Drive link plus the YouTube ids.
+Titles read `<chapter title> | Class 11 · Chemistry · Chapter 1 (Audio)`; the
+description lists class, subject, book, chapter, the NCERT PDF and book links,
+and hashtags. Each video goes into a playlist per class + subject (`NCERT Class
+11 Chemistry`, created on first use; ids cached in `.youtube_playlists.json`),
+which costs ~50 quota units per video on top of the upload.
+
+The API doesn't say how much quota is left, so the pipeline counts what it
+spends per Pacific-time day (`.youtube_quota.json`) and prints it after each
+chapter's uploads, at the start of `python run.py youtube`, and in `status` /
+`check`:
+
+```
+YouTube quota  3,300/10,000 today · ~4 uploads left · resets 12:30 IST · in 5h 10m
+```
+
+Uploads made outside the pipeline (YouTube Studio is free; other API apps on the
+same project aren't) aren't counted. Network errors and YouTube 5xx are retried
+in the same run (`YOUTUBE_ATTEMPTS`, default 3, 30s then 60s apart); anything
+still failing is retried on the next run, and quota errors stop YouTube for the
+run and say when it resets.
+This reuses the Drive OAuth client:
 
 1. Cloud Console (same project) → **APIs & Services → Library** → enable
    **YouTube Data API v3**.

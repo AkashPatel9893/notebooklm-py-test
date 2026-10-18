@@ -65,6 +65,9 @@ FILE_RESOURCES = {
     "source.pdf": ("pdf", "NCERT Chapter PDF"),
 }
 
+# Files that reach YouTube as a different local file (audio_video.py).
+YOUTUBE_ALIASES = {"audio.m4a": "audio_video.mp4"}
+
 _ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
 
 
@@ -225,7 +228,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
 
     resources = []
     for fname, (rtype, label) in FILE_RESOURCES.items():
-        info, yt = drive.get(fname), youtube.get(fname)
+        info, yt = drive.get(fname), youtube.get(YOUTUBE_ALIASES.get(fname, fname))
         if not (info or yt):
             continue
         meta: dict[str, Any] = {"file": fname}
@@ -235,11 +238,13 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
                         size=info.get("size"), mime=info.get("mime"))
         url = info.get("preview_url") if info else None
         if yt:
-            # Videos on YouTube: `url` is the embeddable YouTube player.
             meta.update(youtube_id=yt.get("id"), youtube_url=yt.get("url"),
-                        youtube_embed_url=yt.get("embed_url"), youtube_privacy=yt.get("privacy"),
-                        size=yt.get("size"), mime="video/mp4")
-            url = yt.get("embed_url")
+                        youtube_embed_url=yt.get("embed_url"), youtube_privacy=yt.get("privacy"))
+            # Videos on YouTube: `url` is the embeddable YouTube player. Audio keeps
+            # its Drive file as `url` (and size/mime) when it has one.
+            if rtype == "video" or not info:
+                meta.update(size=yt.get("size"), mime="video/mp4")
+                url = yt.get("embed_url")
         resources.append((fname, rtype, f"{title} – {label}", url, meta))
     if quiz:
         resources.append(("quiz", "quiz", f"{title} – Quiz", None, {"question_count": len(quiz)}))
