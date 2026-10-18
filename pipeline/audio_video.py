@@ -22,12 +22,24 @@ VIDEO = "audio_video.mp4"
 
 W, H = 1280, 720
 BG, FG, MUTED, ACCENT = "#0f172a", "#f8fafc", "#94a3b8", "#f59e0b"
-FONTS = (  # first one that exists wins; Pillow's built-in font otherwise
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",
-)
+# Per script, first (path, face index) that exists wins; Pillow's built-in font
+# otherwise. Hindi/Sanskrit/Urdu titles also need Pillow built with libraqm
+# (brew install libraqm) to place vowel signs — without it the card falls back
+# to the English "Subject · Chapter" heading.
+FONTS = {
+    "latin": (("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 0),
+              ("/System/Library/Fonts/Helvetica.ttc", 1),
+              ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0),
+              ("C:/Windows/Fonts/arialbd.ttf", 0)),
+    "devanagari": (("/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc", 1),
+                   ("/System/Library/Fonts/Kohinoor.ttc", 0),
+                   ("/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf", 0),
+                   ("C:/Windows/Fonts/Nirmala.ttc", 1)),
+    "arabic": (("/System/Library/Fonts/NotoNastaliq.ttc", 0),
+               ("/System/Library/Fonts/GeezaPro.ttc", 1),
+               ("/usr/share/fonts/truetype/noto/NotoNastaliqUrdu-Regular.ttf", 0),
+               ("C:/Windows/Fonts/Nirmala.ttc", 1)),
+}
 
 
 class AudioVideoError(RuntimeError):
@@ -42,12 +54,33 @@ def stale(cdir: Path) -> bool:
     return not video.is_file() or video.stat().st_mtime < audio.stat().st_mtime
 
 
-def _font(size: int):
+def duration(path: Path) -> float | None:
+    """Length in seconds (ffprobe), or None when it can't be read."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _script(text: str) -> str:
+    if any("\u0900" <= c <= "\u097f" for c in text):
+        return "devanagari"
+    if any("\u0600" <= c <= "\u06ff" for c in text):
+        return "arabic"
+    return "latin"
+
+
+def _font(size: int, script: str = "latin"):
     from PIL import ImageFont
 
-    for path in FONTS:
+    for path, index in FONTS[script]:
         if Path(path).is_file():
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, size, index=index)
     return ImageFont.load_default(size=size)
 
 
@@ -57,16 +90,21 @@ def _cover(path: Path, title: str, subtitle: str) -> None:
     except ImportError as e:
         raise AudioVideoError("Pillow isn't installed — pip install -r pipeline/requirements.txt") from e
 
+    from PIL import features
+
+    script = _script(title)
+    if script != "latin" and not features.check("raqm"):
+        title, script = subtitle.removeprefix("NCERT ").split(" · ", 1)[-1], "latin"
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     x = 96
     d.rectangle((x, 150, x + 120, 158), fill=ACCENT)
     d.text((x, 185), "AUDIO OVERVIEW", font=_font(34), fill=ACCENT)
-    title_font = _font(68 if len(title) <= 40 else 54)
+    title_font = _font(68 if len(title) <= 40 else 54, script)
     lines = textwrap.wrap(title, width=28 if len(title) <= 40 else 36)[:3]
     y = 250
     for line in lines:
-        d.text((x, y), line, font=title_font, fill=FG)
+        d.text((x, y), line, font=title_font, fill=FG)  # libraqm picks the direction
         y += title_font.size + 18
     d.text((x, H - 140), subtitle, font=_font(36), fill=MUTED)
     img.save(path)

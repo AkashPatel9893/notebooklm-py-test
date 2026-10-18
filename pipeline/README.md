@@ -203,11 +203,12 @@ their links are written to `youtube.json` and to MongoDB. Until you've run
 `youtube-login` (or with `--no-youtube`) they go to Drive as before.
 The audio overview goes too: YouTube won't take audio alone, so `audio.m4a`
 is turned into `audio_video.mp4` (the audio over a generated title card, see
-`audio_video.py`; needs `ffmpeg` and Pillow). `audio.m4a` itself still goes to
+`audio_video.py`; needs `ffmpeg` and Pillow — plus `brew install libraqm`
+for Hindi/Sanskrit/Urdu chapter titles, else their card shows the English
+"Subject · Chapter" instead). `audio.m4a` itself still goes to
 Drive, and MongoDB's audio resource keeps its Drive link plus the YouTube ids.
 Titles read `<chapter title> | Class 11 · Chemistry · Chapter 1 (Audio)`; the
-description lists class, subject, book, chapter, the NCERT PDF and book links,
-and hashtags. Each video goes into a playlist per class + subject (`NCERT Class
+description lists class, subject, book, chapter and hashtags (no links). Each video goes into a playlist per class + subject (`NCERT Class
 11 Chemistry`, created on first use; ids cached in `.youtube_playlists.json`),
 which costs ~50 quota units per video on top of the upload.
 
@@ -225,6 +226,20 @@ same project aren't) aren't counted. Network errors and YouTube 5xx are retried
 in the same run (`YOUTUBE_ATTEMPTS`, default 3, 30s then 60s apart); anything
 still failing is retried on the next run, and quota errors stop YouTube for the
 run and say when it resets.
+
+More YouTube behaviour:
+
+- **Changed videos.** A regenerated file becomes a new YouTube video (YouTube
+  can't swap media); the old one is then *unlisted* and taken out of the
+  playlist — its link still plays, but it leaves the channel page and search.
+  The ids are kept under `replaced` in `youtube.json`.
+- **Playlist order.** Videos are inserted in book → chapter → Video / Cinematic /
+  Audio order, read back from each video's description (+1 quota unit).
+- **Made for kids.** Classes up to `YOUTUBE_KIDS_MAX_CLASS` (default 5) are
+  uploaded as made for kids; changing it updates videos already uploaded.
+- **No duplicates.** Before each upload the channel's 50 newest uploads are
+  checked for the same title (~2 units); a video an earlier, interrupted
+  attempt already sent is recorded instead of uploaded again.
 This reuses the Drive OAuth client:
 
 1. Cloud Console (same project) → **APIs & Services → Library** → enable

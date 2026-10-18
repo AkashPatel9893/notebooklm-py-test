@@ -45,6 +45,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -186,12 +187,56 @@ def youtube_playlist(row: dict[str, str]) -> tuple[str, str]:
             f"Chapter-wise audio and video overviews for NCERT {cls} {subj}.")
 
 
+# Classes up to this one are uploaded as "made for kids" (YouTube's COPPA flag:
+# no comments, no personalised ads). YouTube may override it either way.
+YOUTUBE_KIDS_MAX_CLASS = int(os.getenv("YOUTUBE_KIDS_MAX_CLASS") or 5)
+
+
+def youtube_made_for_kids(row: dict[str, str]) -> bool:
+    n = re.search(r"\d+", row.get("class", ""))
+    return bool(n) and int(n.group()) <= YOUTUBE_KIDS_MAX_CLASS
+
+
+def _ch_no(text: str) -> int:
+    n = re.search(r"\d+", text)
+    return int(n.group()) if n else 0
+
+
+def youtube_sort_key(row: dict[str, str], kind: str) -> tuple[str, int, int]:
+    """Playlist order: book, then chapter number, then Video → Cinematic → Audio."""
+    book = (row.get("book") or "").strip()
+    book = "" if book == row["subject"].strip() else book
+    kinds = list(YOUTUBE_LABELS)
+    return (book.casefold(), _ch_no(row["chapter"]),
+            kinds.index(kind) if kind in kinds else len(kinds))
+
+
+def youtube_key_of(snippet: dict[str, Any]) -> tuple[str, int, int] | None:
+    """Sort key of a playlist item, read back from the description youtube_meta wrote."""
+    lines = (snippet.get("description") or "").splitlines()
+    chapter = next((ln for ln in lines if ln.startswith("Chapter: ")), None)
+    if not lines or chapter is None:
+        return None  # not one of ours — leave where it is
+    book = next((ln[len("Book: "):] for ln in lines if ln.startswith("Book: ")), "")
+    kind = lines[0].rsplit(" — ", 1)[-1]
+    kinds = list(YOUTUBE_LABELS)
+    return (book.strip().casefold(), _ch_no(chapter.split(" — ")[0]),
+            kinds.index(kind) if kind in kinds else len(kinds))
+
+
+def _hashtag(text: str) -> str:
+    """'Chemistry Part-I' → 'ChemistryPartI'; keeps Hindi vowel signs (सूरदास → सूरदास)."""
+    words = ("".join(c for c in w if c.isalnum() or unicodedata.category(c).startswith("M"))
+             for w in text.split())
+    return "".join(w[:1].upper() + w[1:] for w in words)
+
+
 def youtube_meta(row: dict[str, str], kind: str) -> tuple[str, str, list[str]]:
     """Title, description and tags for one chapter video.
 
     Title is the chapter title plus where it sits and what it is ("… | Class 11
     · Chemistry · Chapter 1 (Audio)"), shortened to fit YouTube's 100
-    characters. The description adds the book and the NCERT links.
+    characters. The description adds the book and hashtags (no links).
     """
     cls, subj, ch = row["class"].strip(), row["subject"].strip(), row["chapter"].strip()
     book = (row.get("book") or "").strip()
@@ -208,14 +253,8 @@ def youtube_meta(row: dict[str, str], kind: str) -> tuple[str, str, list[str]]:
     if book and book != subj:
         lines.append(f"Book: {book}")
     lines.append(f"Chapter: {ch}" + (f" — {name}" if name else ""))
-    links = [("📖 Read the chapter (NCERT PDF): ", row.get("pdf_url")),
-             ("📚 Book contents: ", row.get("book_index_url"))]
-    if any(u for _, u in links):
-        lines.append("")
-        lines += [t + u.strip() for t, u in links if u and u.strip()]
     lines += ["", " ".join(dict.fromkeys(
-        "#" + re.sub(r"\W", "", "".join(w[:1].upper() + w[1:] for w in t.split()))
-        for t in ("NCERT", cls, subj, book, name) if t))]
+        "#" + _hashtag(t) for t in ("NCERT", cls, subj, book, name) if t))]
     tags = [t for t in dict.fromkeys(["NCERT", cls, subj, book, ch, name, kind,
                                       f"NCERT {cls} {subj}"]) if t]
     return title, "\n".join(lines), tags
@@ -1284,8 +1323,9 @@ def load_youtube_manifest(cdir: Path) -> dict[str, Any]:
 
 
 def youtube_pending(cdir: Path) -> list[Path]:
-    """Videos to upload, whose privacy no longer matches YOUTUBE_PRIVACY, or
-    that aren't in their playlist yet.
+    """Videos to upload, whose privacy no longer matches YOUTUBE_PRIVACY, that
+    aren't in their playlist yet, that YouTube hasn't confirmed as processed, or
+    whose replaced older version is still listed.
 
     Includes audio_video.mp4 when it still has to be built from audio.m4a.
     """
@@ -1295,7 +1335,9 @@ def youtube_pending(cdir: Path) -> list[Path]:
                 (cdir / n).is_file() and (
                     not _in_sync(manifest.get(n), cdir / n)
                     or manifest[n].get("requested_privacy") != youtube_upload.PRIVACY
-                    or not manifest[n].get("playlist_id")))]
+                    or not manifest[n].get("playlist_id")
+                    or not manifest[n].get("processed")
+                    or any(not o.get("retired") for o in manifest[n].get("replaced", []))))]
 
 
 # Tries per YouTube call within one run (network drops, 5xx) before leaving
@@ -1316,6 +1358,16 @@ def youtube_quota_line() -> Text:
         (f"{q['used']:,}/{q['limit']:,}", style), " today · ",
         (f"~{q['uploads_left']} upload{'s' * (q['uploads_left'] != 1)} left", style),
         f" · resets {_reset_label(q['resets_at'])}")
+
+
+def save_youtube_manifest(cdir: Path, manifest: dict[str, Any]) -> None:
+    tmp = cdir / f".{YOUTUBE_MANIFEST}.tmp"
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp, cdir / YOUTUBE_MANIFEST)
+
+
+# YouTube refuses longer videos until the channel is phone-verified.
+YOUTUBE_MAX_UNVERIFIED_SECS = 15 * 60
 
 
 def use_youtube(enabled: bool) -> "YouTubeSync":
@@ -1412,73 +1464,169 @@ class YouTubeSync:
             except Exception as e:  # noqa: BLE001 — retried on the next sync
                 log.error("[%s] %s FAILED: %s", key, audio_video.VIDEO, e)
                 pending = [f for f in pending if f.name != audio_video.VIDEO]
+        # Uploads YouTube hasn't confirmed yet: keep the processed ones, and drop the
+        # ones it rejected (e.g. over 15 min on an unverified channel) so they go up again.
+        unchecked = [n for n, v in manifest.items() if n in YOUTUBE_FILES and not v.get("processed")]
+        if unchecked:
+            async with self.lock:
+                if not self.enabled:
+                    return
+                try:
+                    states = await self._call(key, "status check", yt.video_states,
+                                              [manifest[n]["id"] for n in unchecked])
+                except youtube_upload.QuotaExceeded:
+                    return
+                except Exception as e:  # noqa: BLE001 — checked again next sync
+                    log.warning("[%s] youtube status check failed: %s", key, e)
+                    states = {}
+                for n in unchecked:
+                    vid = manifest[n]["id"]
+                    state, why = states.get(vid, ("", ""))
+                    if state == "processed":
+                        manifest[n]["processed"] = True
+                    elif state in ("rejected", "failed", "deleted", "missing"):
+                        log.warning("[%s] ▶ %s (%s) was %s by YouTube%s — removing it to upload again",
+                                    key, n, vid, state, f" ({why})" if why else "")
+                        if state != "missing":
+                            try:
+                                await self._call(key, f"delete {n}", yt.delete, vid)
+                            except youtube_upload.QuotaExceeded:
+                                return
+                            except Exception as e:  # noqa: BLE001 — a dead video, harmless
+                                log.warning("[%s] couldn't delete %s (%s): %s", key, n, vid, e)
+                        del manifest[n]
+            save_youtube_manifest(cdir, manifest)
+            pending = [f for f in youtube_pending(cdir)
+                       if f.is_file() or f.name != audio_video.VIDEO]
         spent = False  # any quota used for this chapter → show what's left
+        kids = youtube_made_for_kids(row)
         for f in pending:
             md5 = await asyncio.to_thread(drive_upload.file_md5, f)
             old = manifest.get(f.name)
+            kind = YOUTUBE_FILES[f.name]
             sent = changed = False
             if old and old.get("md5") == md5:
                 # Same video, only touched on disk — never spend quota on it twice.
                 old.update(size=f.stat().st_size, mtime=f.stat().st_mtime)
                 info = old
-                if old.get("requested_privacy") != youtube_upload.PRIVACY:
+                if (old.get("requested_privacy") != youtube_upload.PRIVACY
+                        or old.get("made_for_kids", False) != kids):
                     async with self.lock:
                         if not self.enabled:
                             return
                         try:
                             applied = await self._call(key, f"privacy {f.name}",
-                                                       yt.set_privacy, old["id"])
+                                                       yt.set_privacy, old["id"], kids)
                         except youtube_upload.QuotaExceeded:
                             return
                         except Exception as e:  # noqa: BLE001 — retried on the next sync
                             log.error("[%s] youtube privacy %s FAILED: %s", key, f.name, e)
                             continue
-                    old.update(requested_privacy=youtube_upload.PRIVACY, privacy=applied)
+                    old.update(requested_privacy=youtube_upload.PRIVACY, privacy=applied,
+                               made_for_kids=kids)
                     changed = True
             else:
+                secs = await asyncio.to_thread(audio_video.duration, f)
+                if secs and secs > YOUTUBE_MAX_UNVERIFIED_SECS:
+                    async with self.lock:
+                        try:
+                            long_ok = await self._call(key, "channel check", yt.long_uploads)
+                        except youtube_upload.QuotaExceeded:
+                            return
+                        except Exception as e:  # noqa: BLE001 — let YouTube decide
+                            log.warning("[%s] youtube channel check failed: %s", key, e)
+                            long_ok = "allowed"
+                    if long_ok != "allowed":
+                        log.error("[%s] ▶ %s is %d min — YouTube only accepts over 15 min from a "
+                                  "phone-verified channel (status: %s). Verify at "
+                                  "https://www.youtube.com/verify, then re-run. Skipped, no quota used.",
+                                  key, f.name, secs // 60, long_ok or "unknown")
+                        continue
+                title, desc, tags = youtube_meta(row, kind)
+                # Earlier versions of this file — never mistaken for this one.
+                replaced = (old.get("replaced", []) + [
+                    {"id": old["id"], "playlist_item_id": old.get("playlist_item_id")}]) if old else []
                 async with self.lock:
                     if not self.enabled:  # quota ran out on another chapter meanwhile
                         return
-                    if not self.progress.live.is_started:
-                        self.progress.start()
-                    task = self.progress.add_task(f"{short_key(key)} · {f.name}",
-                                                  total=f.stat().st_size or 1)
                     try:
-                        title, desc, tags = youtube_meta(row, YOUTUBE_FILES[f.name])
-                        info = await self._call(
-                            key, f"upload {f.name}", yt.upload, f, title, desc, md5,
-                            lambda sent_b, _t: self.progress.update(task, completed=sent_b),
-                            tags)
+                        # An earlier attempt may have finished on YouTube but died before
+                        # youtube.json was written: adopt that video instead of a duplicate.
+                        found = await self._call(key, f"lookup {f.name}", yt.find_upload, title,
+                                                 {o["id"] for o in replaced})
                     except youtube_upload.QuotaExceeded:
                         return
-                    except Exception as e:  # noqa: BLE001 — retried on the next sync
-                        log.error("[%s] youtube upload %s FAILED: %s", key, f.name, e)
-                        continue
-                    finally:
-                        self.progress.remove_task(task)
-                        if not self.progress.tasks:
-                            self.progress.stop()
+                    except Exception as e:  # noqa: BLE001 — the lookup is only a safety net
+                        log.warning("[%s] youtube lookup %s failed (%s) — uploading", key, f.name, e)
+                        found = None
+                    if found:
+                        st = f.stat()
+                        info = {**found, "name": f.name, "requested_privacy": youtube_upload.PRIVACY,
+                                "size": st.st_size, "mtime": st.st_mtime, "md5": md5,
+                                "synced_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                **youtube_upload.links(found["id"])}
+                        log.info("[%s] ▶ %s was already on YouTube (earlier attempt) — recorded, "
+                                 "not uploaded again", key, f.name)
+                    else:
+                        if not self.progress.live.is_started:
+                            self.progress.start()
+                        task = self.progress.add_task(f"{short_key(key)} · {f.name}",
+                                                      total=f.stat().st_size or 1)
+                        try:
+                            info = await self._call(
+                                key, f"upload {f.name}", yt.upload, f, title, desc, md5,
+                                lambda sent_b, _t: self.progress.update(task, completed=sent_b),
+                                tags, kids)
+                        except youtube_upload.QuotaExceeded:
+                            return
+                        except Exception as e:  # noqa: BLE001 — retried on the next sync
+                            log.error("[%s] youtube upload %s FAILED: %s", key, f.name, e)
+                            continue
+                        finally:
+                            self.progress.remove_task(task)
+                            if not self.progress.tasks:
+                                self.progress.stop()
+                info.update(made_for_kids=kids, replaced=replaced)
                 sent = changed = True
             if not info.get("playlist_id"):
                 async with self.lock:
                     if not self.enabled:
                         return
                     try:
-                        pid = await self._call(key, f"playlist {f.name}", yt.add_to_playlist,
-                                               info["id"], *youtube_playlist(row))
+                        pid, item = await self._call(
+                            key, f"playlist {f.name}", yt.add_to_playlist, info["id"],
+                            *youtube_playlist(row), youtube_sort_key(row, kind), youtube_key_of)
                     except youtube_upload.QuotaExceeded:
-                        pid = None
+                        pid = item = None
                     except Exception as e:  # noqa: BLE001 — retried on the next sync
                         log.error("[%s] youtube playlist %s FAILED: %s", key, f.name, e)
-                        pid = None
+                        pid = item = None
                 if pid:
-                    info["playlist_id"] = pid
+                    info.update(playlist_id=pid, playlist_item_id=item)
                     log.info("[%s] ▶ %s added to playlist \"%s\" done",
                              key, f.name, youtube_playlist(row)[0])
+            for o in info.get("replaced", []):
+                if o.get("retired") or not self.enabled:
+                    continue
+                # The older version stays reachable by its link but leaves the
+                # channel page, search and the playlist.
+                async with self.lock:
+                    try:
+                        if o.get("playlist_item_id"):
+                            await self._call(key, f"retire {f.name}", yt.remove_from_playlist,
+                                             o["playlist_item_id"])
+                        await self._call(key, f"retire {f.name}", yt.set_privacy, o["id"], kids,
+                                         "unlisted")
+                    except youtube_upload.QuotaExceeded:
+                        break
+                    except Exception as e:  # noqa: BLE001 — retried on the next sync
+                        log.error("[%s] unlisting old %s (%s) FAILED: %s", key, f.name, o["id"], e)
+                        continue
+                o["retired"] = True
+                log.info("[%s] ▶ old %s %s unlisted and taken out of the playlist done",
+                         key, f.name, o["id"])
             manifest[f.name] = info
-            tmp = cdir / f".{YOUTUBE_MANIFEST}.tmp"
-            tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            os.replace(tmp, cdir / YOUTUBE_MANIFEST)
+            save_youtube_manifest(cdir, manifest)
             spent = spent or changed or bool(info.get("playlist_id"))
             if changed:
                 note = "" if info["privacy"] == youtube_upload.PRIVACY else \
@@ -1851,6 +1999,7 @@ ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
     ("YOUTUBE_PRIVACY", False, False),
     ("YOUTUBE_DAILY_QUOTA", False, False),
     ("YOUTUBE_ATTEMPTS", False, False),
+    ("YOUTUBE_KIDS_MAX_CLASS", False, False),
     ("MONGODB_URI", True, True),
     ("MONGODB_DB", False, False),
 ]
@@ -1908,6 +2057,10 @@ async def cmd_check(_: argparse.Namespace) -> None:
         channel = await asyncio.to_thread(yt.channel_title)
         checks.add_row("YouTube", Text.assemble(
             ok, f"  (channel \"{channel}\", uploads {youtube_upload.PRIVACY})"))
+        long_ok = await asyncio.to_thread(yt.long_uploads)
+        checks.add_row("", Text("videos over 15 min allowed", style="green") if long_ok == "allowed"
+                       else Text(f"videos over 15 min BLOCKED ({long_ok or 'unknown'}) — "
+                                 "verify the channel at https://www.youtube.com/verify", style="red"))
         checks.add_row("", youtube_quota_line())
     except Exception as e:  # noqa: BLE001
         checks.add_row("YouTube", bad(str(e)))

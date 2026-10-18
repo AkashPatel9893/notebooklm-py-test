@@ -231,6 +231,7 @@ class YouTube:
         md5: str,
         on_progress: Callable[[int, int], None] | None = None,
         tags: list[str] | None = None,
+        made_for_kids: bool = False,
     ) -> dict[str, Any]:
         """Upload one video and return its info (id + links).
 
@@ -244,7 +245,7 @@ class YouTube:
         body = {
             "snippet": {"title": _clean_title(title), "description": description[:5000],
                         "categoryId": CATEGORY_EDUCATION, "tags": tags or []},
-            "status": {"privacyStatus": PRIVACY, "selfDeclaredMadeForKids": False},
+            "status": {"privacyStatus": PRIVACY, "selfDeclaredMadeForKids": made_for_kids},
         }
         media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True, chunksize=CHUNK)
         req = self.svc.videos().insert(part="snippet,status", body=body, media_body=media)
@@ -307,45 +308,141 @@ class YouTube:
         PLAYLISTS_FILE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
         return cache[title]
 
-    def add_to_playlist(self, video_id: str, title: str, description: str) -> str:
-        """Put a video in the playlist ``title`` (~50 quota units); returns the playlist id."""
+    def _call(self, req: Any, units: int, what: str) -> Any:
+        """Execute one request, counting its quota and turning quota errors into QuotaExceeded."""
         from googleapiclient.errors import HttpError
 
-        def body(pid: str) -> dict[str, Any]:
-            return {"snippet": {"playlistId": pid,
-                                "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
-
+        _charge(units)
         try:
-            pid = self._playlist_id(title, description)
-            _charge(COST_WRITE)
-            try:
-                self.svc.playlistItems().insert(part="snippet", body=body(pid)).execute(
-                    num_retries=RETRIES)
-            except HttpError as e:
-                if e.resp.status != 404:  # playlist deleted on YouTube — find/create it again
-                    raise
-                pid = self._playlist_id(title, description, refresh=True)
-                _charge(COST_WRITE)
-                self.svc.playlistItems().insert(part="snippet", body=body(pid)).execute(
-                    num_retries=RETRIES)
+            return req.execute(num_retries=RETRIES)
         except HttpError as e:
-            if q := _quota_error(e, "playlists"):
+            if q := _quota_error(e, what):
                 raise q from e
             raise
-        return pid
 
-    def set_privacy(self, video_id: str) -> str:
-        """Set an uploaded video to YOUTUBE_PRIVACY (~50 quota units); returns what YouTube applied."""
+    def _playlist_items(self, playlist_id: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        req = self.svc.playlistItems().list(part="snippet,status", playlistId=playlist_id,
+                                            maxResults=50)
+        while req is not None:
+            res = self._call(req, COST_LIST, "playlists")
+            items += res.get("items", [])
+            req = self.svc.playlistItems().list_next(req, res)
+        return items
+
+    def add_to_playlist(
+        self,
+        video_id: str,
+        title: str,
+        description: str,
+        key: Any = None,
+        key_of: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> tuple[str, str]:
+        """Put a video in the playlist ``title`` (~50 quota units + 1 to read its order).
+
+        With ``key`` (this video's sort key) and ``key_of`` (playlist item snippet →
+        its key, or None when unknown) the video goes in before the first item
+        that sorts after it, so the playlist reads in chapter order; otherwise
+        it's appended. Returns (playlist id, playlist item id).
+        """
         from googleapiclient.errors import HttpError
 
-        _charge(COST_WRITE)
+        def insert(pid: str) -> dict[str, Any]:
+            snippet: dict[str, Any] = {
+                "playlistId": pid, "resourceId": {"kind": "youtube#video", "videoId": video_id}}
+            if key is not None and key_of is not None:
+                keys = [key_of(it["snippet"]) for it in self._playlist_items(pid)]
+                after = [i for i, k in enumerate(keys) if k is not None and k > key]
+                if after:
+                    snippet["position"] = after[0]
+            return self._call(self.svc.playlistItems().insert(part="snippet", body={"snippet": snippet}),
+                              COST_WRITE, "playlists")
+
+        pid = self._playlist_id(title, description)
         try:
-            res = self.svc.videos().update(part="status", body={
-                "id": video_id,
-                "status": {"privacyStatus": PRIVACY, "selfDeclaredMadeForKids": False},
-            }).execute(num_retries=RETRIES)
+            item = insert(pid)
         except HttpError as e:
-            if q := _quota_error(e, "privacy changes"):
-                raise q from e
-            raise
-        return res.get("status", {}).get("privacyStatus", PRIVACY)
+            if e.resp.status != 404:  # playlist deleted on YouTube — find/create it again
+                raise
+            pid = self._playlist_id(title, description, refresh=True)
+            item = insert(pid)
+        return pid, item["id"]
+
+    def remove_from_playlist(self, item_id: str) -> None:
+        """Take one entry out of a playlist (~50 units); already gone is fine."""
+        from googleapiclient.errors import HttpError
+
+        try:
+            self._call(self.svc.playlistItems().delete(id=item_id), COST_WRITE, "playlists")
+        except HttpError as e:
+            if e.resp.status != 404:
+                raise
+
+    def set_privacy(self, video_id: str, made_for_kids: bool = False,
+                    privacy: str | None = None) -> str:
+        """Set a video's privacy (YOUTUBE_PRIVACY unless given; ~50 units); returns what YouTube applied."""
+        privacy = privacy or PRIVACY
+        res = self._call(self.svc.videos().update(part="status", body={
+            "id": video_id,
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": made_for_kids},
+        }), COST_WRITE, "privacy changes")
+        return res.get("status", {}).get("privacyStatus", privacy)
+
+    def long_uploads(self) -> str:
+        """Channel's longUploadsStatus: 'allowed' lets it upload over 15 minutes;
+        'eligible'/'disallowed' mean not yet — phone-verify at youtube.com/verify (~1 unit)."""
+        if not hasattr(self, "_long"):
+            res = self._call(self.svc.channels().list(part="status", mine=True), COST_LIST, "uploads")
+            items = res.get("items", [])
+            self._long = items[0].get("status", {}).get("longUploadsStatus", "") if items else ""
+        return self._long
+
+    def video_states(self, video_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """{id: (state, reason)} — state is YouTube's uploadStatus (uploaded = still
+        processing, processed, rejected, failed, deleted), or 'missing' when the
+        video is gone. ~1 unit per 50 ids."""
+        out: dict[str, tuple[str, str]] = {}
+        for i in range(0, len(video_ids), 50):
+            chunk = video_ids[i:i + 50]
+            res = self._call(self.svc.videos().list(part="status,processingDetails",
+                                                    id=",".join(chunk)), COST_LIST, "uploads")
+            for v in res.get("items", []):
+                st, pd = v.get("status", {}), v.get("processingDetails", {})
+                state = st.get("uploadStatus", "")
+                if pd.get("processingStatus") in ("failed", "terminated") and state != "processed":
+                    state = "failed"
+                out[v["id"]] = (state, st.get("rejectionReason") or st.get("failureReason")
+                                or pd.get("processingFailureReason") or "")
+            for vid in chunk:
+                out.setdefault(vid, ("missing", ""))
+        return out
+
+    def delete(self, video_id: str) -> None:
+        """Delete a video (~50 units); already gone is fine."""
+        from googleapiclient.errors import HttpError
+
+        try:
+            self._call(self.svc.videos().delete(id=video_id), COST_WRITE, "deletes")
+        except HttpError as e:
+            if e.resp.status != 404:
+                raise
+
+    def find_upload(self, title: str, skip_ids: set[str]) -> dict[str, Any] | None:
+        """A video among the channel's 50 newest uploads titled ``title`` (and not in
+        ``skip_ids``) — one an earlier attempt sent but never recorded (~2 units)."""
+        if not hasattr(self, "_uploads"):
+            res = self._call(self.svc.channels().list(part="contentDetails", mine=True),
+                             COST_LIST, "uploads")
+            items = res.get("items", [])
+            self._uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"] if items else ""
+        if not self._uploads:
+            return None
+        res = self._call(self.svc.playlistItems().list(
+            part="snippet,status", playlistId=self._uploads, maxResults=50), COST_LIST, "uploads")
+        want = _clean_title(title)
+        for it in res.get("items", []):
+            vid = it["snippet"]["resourceId"]["videoId"]
+            if it["snippet"]["title"] == want and vid not in skip_ids:
+                return {"id": vid, "title": want,
+                        "privacy": it.get("status", {}).get("privacyStatus", PRIVACY)}
+        return None
