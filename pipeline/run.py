@@ -91,9 +91,6 @@ console = Console(highlight=False)  # colours only on a real terminal
 # Configuration
 # --------------------------------------------------------------------------- #
 
-SHEET_ID = "1pvR_vpZjeEK9d3UxuFaFGX0GS_S8ObUu_dS6jWmlKeE"
-SHEET_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
-
 HERE = Path(__file__).resolve().parent
 load_dotenv(HERE / ".env")  # secrets + settings; see .env.example
 OUTPUT_DIR = HERE / "output"
@@ -454,7 +451,11 @@ class Store:
 
     def sync_from_sheet(self) -> int:
         """Pull the sheet; add new rows, refresh sheet-derived columns. Returns #added."""
-        resp = httpx.get(SHEET_CSV_URL, follow_redirects=True, timeout=60.0)
+        sheet_id = os.getenv("SHEET_ID", "").strip()
+        if not sheet_id:
+            raise RuntimeError("SHEET_ID is not set — add it to pipeline/.env (see .env.example)")
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+        resp = httpx.get(url, follow_redirects=True, timeout=60.0)
         resp.raise_for_status()
         reader = csv.DictReader(resp.text.splitlines())
         added = 0
@@ -1547,6 +1548,7 @@ def summarize(store: Store) -> None:
 
 
 ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
+    ("SHEET_ID", True, False),
     ("GOOGLE_DRIVE_CLIENT_ID", True, False),
     ("GOOGLE_DRIVE_CLIENT_SECRET", True, True),
     ("GOOGLE_DRIVE_REFRESH_TOKEN", False, True),
