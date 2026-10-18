@@ -1,0 +1,6 @@
+# Extra packages the pipeline needs on top of notebooklm-py itself
+# (pip install -r pipeline/requirements.txt, inside the repo's .venv).
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+python-dotenv>=1.0
+pymongo>=4.6

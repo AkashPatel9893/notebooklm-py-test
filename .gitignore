@@ -51,3 +51,13 @@ src/notebooklm/_commit.py
 notebooklm.apk/
 frida-scripts/
 error.log
+
+# NCERT → NotebookLM pipeline: generated outputs and local run state
+# (keep run.py / README.md / COMMANDS.md tracked; ignore everything generated)
+pipeline/output/
+pipeline/progress.csv
+pipeline/pipeline.log
+pipeline/.pipeline.lock
+# Google Drive credentials for the pipeline — secrets, never commit
+pipeline/client_secret.json
+pipeline/.drive_token.json
