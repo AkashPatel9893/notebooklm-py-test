@@ -268,8 +268,13 @@ the run with an error.
 > Google's *YouTube API Services audit and quota extension* form.
 >
 > **About 6 uploads a day.** Each upload costs ~1,600 of the default 10,000
-> daily quota units. When it runs out, YouTube uploads stop for the rest of the
-> run and resume on the next one (the same form raises the quota).
+> daily quota units. Every call is counted locally (`.youtube_quota.json`) and
+> checked *before* it's sent, so the pipeline stops at the limit instead of
+> hitting it; uploads resume on the next run after midnight Pacific (the same
+> form raises the quota — then set `YOUTUBE_DAILY_QUOTA`). Calls are spaced
+> `YOUTUBE_CALL_GAP` s apart and uploads `YOUTUBE_UPLOAD_GAP` s apart; if
+> YouTube still says "rate limit", the call waits and retries instead of
+> stopping the run.
 >
 > Videos longer than 15 minutes need a phone-verified channel
 > (youtube.com/verify). A changed local video becomes a *new* YouTube video —

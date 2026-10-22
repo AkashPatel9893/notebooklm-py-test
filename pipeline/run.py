@@ -1999,6 +1999,8 @@ ENV_VARS = [  # (name, required?, secret?) — keep in sync with .env.example
     ("YOUTUBE_PRIVACY", False, False),
     ("YOUTUBE_DAILY_QUOTA", False, False),
     ("YOUTUBE_ATTEMPTS", False, False),
+    ("YOUTUBE_CALL_GAP", False, False),
+    ("YOUTUBE_UPLOAD_GAP", False, False),
     ("YOUTUBE_KIDS_MAX_CLASS", False, False),
     ("MONGODB_URI", True, True),
     ("MONGODB_DB", False, False),

@@ -22,7 +22,12 @@ Two limits Google applies to every API project:
   ``QuotaExceeded`` is raised when it runs out; the pipeline stops uploading
   for the rest of the run and retries next time. The API doesn't report
   what's left, so every call is counted locally (``.youtube_quota.json``,
-  per Pacific-time day like Google's) — see ``quota()``.
+  per Pacific-time day like Google's) — see ``quota()`` — and checked
+  *before* it is sent: a call that wouldn't fit is never made, and an
+  upload only starts when its playlist step still fits after it.
+* Short bursts trip ``rateLimitExceeded``: calls are spaced out
+  (``YOUTUBE_CALL_GAP`` / ``YOUTUBE_UPLOAD_GAP`` seconds), and if Google still
+  says slow down, ``RateLimited`` is raised so the caller waits and retries.
 
 YouTube can't replace a video's media, so a changed local file becomes a new
 video; an identical file (same md5) is never sent twice.
@@ -35,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -62,6 +68,14 @@ RETRIES = 6
 DAILY_QUOTA = int(os.getenv("YOUTUBE_DAILY_QUOTA") or 10_000)
 COST_UPLOAD, COST_WRITE, COST_LIST = 1600, 50, 1
 QUOTA_TZ = ZoneInfo("America/Los_Angeles")  # Google resets the quota at midnight PT
+# Units an upload must leave free for what follows it (playlist insert + lookups),
+# so the pipeline never uploads a video it then can't put in its playlist.
+UPLOAD_RESERVE = COST_WRITE + 10
+# Minimum seconds between any two API calls, and between two upload starts —
+# keeps the pipeline well under YouTube's per-minute burst limits.
+CALL_GAP = float(os.getenv("YOUTUBE_CALL_GAP") or 1)
+UPLOAD_GAP = float(os.getenv("YOUTUBE_UPLOAD_GAP") or 60)
+_last_call = _last_upload = 0.0
 
 
 class YouTubeNotConfigured(RuntimeError):
@@ -70,6 +84,10 @@ class YouTubeNotConfigured(RuntimeError):
 
 class QuotaExceeded(RuntimeError):
     """Daily API quota or the channel's upload limit is used up."""
+
+
+class RateLimited(RuntimeError):
+    """YouTube's short-term rate limit — fine again after a wait."""
 
 
 def configured() -> bool:
@@ -155,6 +173,8 @@ def retryable(err: BaseException) -> bool:
     requests, auth, or quota (those fail the same way until something changes)."""
     from googleapiclient.errors import HttpError
 
+    if isinstance(err, RateLimited):
+        return True
     if isinstance(err, (QuotaExceeded, YouTubeNotConfigured)):
         return False
     if isinstance(err, HttpError):
@@ -169,7 +189,7 @@ def _quota_reason(err: Any) -> str | None:
     except (ValueError, KeyError, TypeError):
         return None
     return next((r for r in reasons if r in ("quotaExceeded", "uploadLimitExceeded",
-                                             "rateLimitExceeded")), None)
+                                             "rateLimitExceeded", "userRateLimitExceeded")), None)
 
 
 def _today() -> str:
@@ -197,13 +217,33 @@ def _charge(units: int, exhausted: bool = False) -> None:
     QUOTA_FILE.write_text(json.dumps({"day": _today(), "used": used}), encoding="utf-8")
 
 
-def _quota_error(e: Any, what: str) -> QuotaExceeded | None:
-    """QuotaExceeded for a quota/limit HttpError (and marks today used up), else None."""
+def _spend(units: int, reserve: int = 0, upload: bool = False) -> None:
+    """Before a call: refuse it locally when it (plus ``reserve``) doesn't fit in
+    today's quota, wait out the call/upload spacing, then count it."""
+    global _last_call, _last_upload
+    q = quota()
+    if q["left"] < units + reserve:
+        raise QuotaExceeded(f"only {q['left']} of {q['limit']} YouTube quota units left today, "
+                            f"this needs {units + reserve} — not sent")
+    now = time.monotonic()
+    wait = max(_last_call + CALL_GAP, (_last_upload + UPLOAD_GAP) if upload else 0) - now
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.monotonic()
+    if upload:
+        _last_upload = _last_call
+    _charge(units)
+
+
+def _quota_error(e: Any, what: str) -> QuotaExceeded | RateLimited | None:
+    """QuotaExceeded for a daily quota/limit HttpError (and marks today used up),
+    RateLimited for a short-term one, else None."""
     reason = _quota_reason(e)
     if not reason:
         return None
-    if reason != "rateLimitExceeded":  # a burst limit, not the daily budget
-        _charge(0, exhausted=True)
+    if reason in ("rateLimitExceeded", "userRateLimitExceeded"):  # a burst, not the budget
+        return RateLimited(f"YouTube {reason} — slowing down")
+    _charge(0, exhausted=True)
     return QuotaExceeded(f"YouTube {reason} — {what} resume on the next run")
 
 
@@ -215,7 +255,7 @@ class YouTube:
         self.svc = build("youtube", "v3", credentials=_credentials(), cache_discovery=False)
 
     def channel_title(self) -> str:
-        _charge(COST_LIST)
+        _spend(COST_LIST)
         res = self.svc.channels().list(part="snippet", mine=True).execute()
         items = res.get("items", [])
         if not items:
@@ -251,7 +291,8 @@ class YouTube:
         req = self.svc.videos().insert(part="snippet,status", body=body, media_body=media)
         total = path.stat().st_size
         response = None
-        _charge(COST_UPLOAD)  # Google charges the attempt, finished or not
+        # Google charges the attempt, finished or not.
+        _spend(COST_UPLOAD, reserve=UPLOAD_RESERVE, upload=True)
         try:
             while response is None:
                 status, response = req.next_chunk(num_retries=RETRIES)
@@ -293,17 +334,15 @@ class YouTube:
         if title not in cache:
             req = self.svc.playlists().list(part="snippet", mine=True, maxResults=50)
             while req is not None:
-                _charge(COST_LIST)
-                res = req.execute(num_retries=RETRIES)
+                res = self._call(req, COST_LIST, "playlists")
                 for p in res.get("items", []):
                     cache.setdefault(p["snippet"]["title"], p["id"])
                 req = self.svc.playlists().list_next(req, res)
         if title not in cache:
-            _charge(COST_WRITE)
-            res = self.svc.playlists().insert(part="snippet,status", body={
+            res = self._call(self.svc.playlists().insert(part="snippet,status", body={
                 "snippet": {"title": _clean_title(title), "description": description[:5000]},
                 "status": {"privacyStatus": PRIVACY},
-            }).execute(num_retries=RETRIES)
+            }), COST_WRITE, "playlists")
             cache[title] = res["id"]
         PLAYLISTS_FILE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
         return cache[title]
@@ -312,7 +351,7 @@ class YouTube:
         """Execute one request, counting its quota and turning quota errors into QuotaExceeded."""
         from googleapiclient.errors import HttpError
 
-        _charge(units)
+        _spend(units)
         try:
             return req.execute(num_retries=RETRIES)
         except HttpError as e:
