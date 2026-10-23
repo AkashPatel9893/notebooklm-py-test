@@ -6,7 +6,7 @@ Mongoose's own pluralisation):
 
     ncertclasses → ncertsubjects → ncertbooks → ncertchapters
     ncertquizquestions, ncertflashcards, ncertmindmaps   (content, per chapter)
-    ncertresources                                        (files + decks, per chapter)
+    ncertresources                  (one document per chapter: its media files)
 
 Safe to re-run:
 
@@ -16,8 +16,10 @@ Safe to re-run:
 * Quiz questions / flashcards are upserted on (chapter, question text / card
   front), so ``_id``s stay stable across runs (safe for anything that
   references them); items NotebookLM no longer produces are removed.
-* Resources written here carry ``meta.source = "notebooklm-pipeline"``; only
-  those are ever updated — resources added by hand are left alone.
+* A chapter's media files (audio, video, PDFs) live in a single
+  ``ncertresources`` document keyed on ``chapter_id``, rewritten on each sync.
+  Quiz / flashcards / mind map are not repeated there — they already have
+  their own collections, queried by ``chapter_id``.
 
 The real NotebookLM downloads differ from the samples in the model docstrings
 (mind map is ``{name, children}``, quiz is ``{title, questions}``, flashcards are
@@ -38,7 +40,7 @@ from typing import Any
 
 PIPELINE = "notebooklm-pipeline"
 # Bump when the document shapes written here change, so every chapter re-syncs.
-SCHEMA_VERSION = "3"  # 3: multiple-choice quiz only, no infographic resource (2 saved both)
+SCHEMA_VERSION = "5"  # 5: + infographic item (4: one resources document per chapter)
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
 CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
@@ -54,15 +56,15 @@ C = {
     "resource": "ncertresources",
 }
 
-# Local file → NCERTResource. resource_type must be one of the model's enum:
-# video, pdf, quiz, notes, flashcard, audio, mindmap. Files with no matching
-# type (slides.pptx, infographic.png, *.html, *.md) are not written.
+# Local file → (key, type, title) of an item in the chapter's NCERTResource.
+# Files not listed (slides.pptx, *.json, *.html, *.md) are not written.
 FILE_RESOURCES = {
-    "audio.m4a": ("audio", "Audio Overview"),
-    "cinematic_video.mp4": ("video", "Cinematic Video"),
-    "video.mp4": ("video", "Video Overview"),
-    "slides.pdf": ("pdf", "Slides"),
-    "source.pdf": ("pdf", "NCERT Chapter PDF"),
+    "audio.m4a": ("audio", "audio", "Audio Overview"),
+    "video.mp4": ("video", "video", "Video Overview"),
+    "cinematic_video.mp4": ("cinematic_video", "video", "Cinematic Video"),
+    "slides.pdf": ("slides", "pdf", "Slides"),
+    "source.pdf": ("source_pdf", "pdf", "NCERT Chapter PDF"),
+    "infographic.png": ("infographic", "image", "Infographic"),
 }
 
 # Files that reach YouTube as a different local file (audio_video.py).
@@ -226,37 +228,25 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         raise ValueError(f"can't read class/chapter number from {row['class']!r} / {row['chapter']!r}")
     book_name = (row.get("book") or row["subject"]).strip()
 
-    resources = []
-    for fname, (rtype, label) in FILE_RESOURCES.items():
+    # Only what can't be derived: Drive view/download links and YouTube watch/
+    # embed links all follow from the ids.
+    items = []
+    for fname, (key, rtype, label) in FILE_RESOURCES.items():
         info, yt = drive.get(fname), youtube.get(YOUTUBE_ALIASES.get(fname, fname))
         if not (info or yt):
             continue
-        meta: dict[str, Any] = {"file": fname}
+        # `url` is what the app embeds: the YouTube player for videos, the Drive
+        # preview otherwise (audio keeps its Drive file when it has one).
+        url = yt.get("embed_url") if yt and (rtype == "video" or not info) else info.get("preview_url")
+        item = {"key": key, "type": rtype, "title": label, "url": url}
         if info:
-            meta.update(drive_file_id=info.get("id"), view_url=info.get("view_url"),
-                        preview_url=info.get("preview_url"), download_url=info.get("download_url"),
-                        size=info.get("size"), mime=info.get("mime"))
-        url = info.get("preview_url") if info else None
+            item["drive_id"] = info.get("id")
         if yt:
-            meta.update(youtube_id=yt.get("id"), youtube_url=yt.get("url"),
-                        youtube_embed_url=yt.get("embed_url"), youtube_privacy=yt.get("privacy"))
-            # Videos on YouTube: `url` is the embeddable YouTube player. Audio keeps
-            # its Drive file as `url` (and size/mime) when it has one.
-            if rtype == "video" or not info:
-                meta.update(size=yt.get("size"), mime="video/mp4")
-                url = yt.get("embed_url")
-        resources.append((fname, rtype, f"{title} – {label}", url, meta))
-    if quiz:
-        resources.append(("quiz", "quiz", f"{title} – Quiz", None, {"question_count": len(quiz)}))
-    if cards:
-        resources.append(("flashcards", "flashcard", f"{title} – Flashcard Deck", None,
-                          {"card_count": len(cards)}))
-    if root:
-        resources.append(("mind_map", "mindmap", f"{title} – Mind Map", None,
-                          {"node_count": n_nodes}))
+            item["youtube_id"] = yt.get("id")
+        items.append(item)
 
     summary = {"title": title, "quiz": len(quiz), "flashcards": len(cards),
-               "mind_map_nodes": n_nodes, "resources": [r[0] for r in resources]}
+               "mind_map_nodes": n_nodes, "resources": [i["key"] for i in items]}
     if dry_run:
         return summary
 
@@ -298,17 +288,15 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
             {"$set": {"title": title, "root": root, "updated_at": now},
              "$setOnInsert": {"created_at": now}},
             upsert=True)
-    if resources:
-        db[C["resource"]].bulk_write([UpdateOne(
-            {"chapter_id": chapter_id, "meta.source": PIPELINE, "meta.key": key},
-            {"$set": {"title": rtitle, "resource_type": rtype, "url": url,
-                      "meta": {"source": PIPELINE, "key": key, **meta}, "updated_at": now},
-             "$setOnInsert": {"created_at": now}},
-            upsert=True) for key, rtype, rtitle, url, meta in resources], ordered=False)
-    # Drop our own resources this run no longer produces (never hand-added ones).
-    keep = [r[0] for r in resources] + ([] if root else ["mind_map"])
-    db[C["resource"]].delete_many({"chapter_id": chapter_id, "meta.source": PIPELINE,
-                                   "meta.key": {"$nin": keep}})
+    # Schema 3 wrote one document per file / deck; drop those.
+    db[C["resource"]].delete_many({"chapter_id": chapter_id, "meta.source": PIPELINE})
+    if items:
+        db[C["resource"]].update_one(
+            {"chapter_id": chapter_id},
+            {"$set": {"items": items, "updated_at": now}, "$setOnInsert": {"created_at": now}},
+            upsert=True)
+    else:
+        db[C["resource"]].delete_one({"chapter_id": chapter_id})
 
     summary["chapter_id"] = str(chapter_id)
     marker = {"hash": content_hash(cdir), "chapter_id": str(chapter_id),

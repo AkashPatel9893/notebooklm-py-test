@@ -206,7 +206,7 @@ is turned into `audio_video.mp4` (the audio over a generated title card, see
 `audio_video.py`; needs `ffmpeg` and Pillow — plus `brew install libraqm`
 for Hindi/Sanskrit/Urdu chapter titles, else their card shows the English
 "Subject · Chapter" instead). `audio.m4a` itself still goes to
-Drive, and MongoDB's audio resource keeps its Drive link plus the YouTube ids.
+Drive, and MongoDB's audio item keeps its Drive link plus the YouTube id.
 Titles read `<chapter title> | Class 11 · Chemistry · Chapter 1 (Audio)`; the
 description lists class, subject, book, chapter and hashtags (no links). Each video goes into a playlist per class + subject (`NCERT Class
 11 Chemistry`, created on first use; ids cached in `.youtube_playlists.json`),
@@ -390,8 +390,8 @@ go to Drive by `DRIVE_EXTS` (default: all). `drive.json` holds, per file,
 for audio/video in the app) and `download_url` (raw file; unreliable for large
 files). `youtube.json` holds, per video, `url` (youtu.be link), `embed_url`
 (for an `<iframe>`) and `privacy` (what YouTube actually applied). MongoDB saves
-them on the video resource: `url` is the YouTube `embed_url`, plus
-`meta.youtube_url`, `meta.youtube_id` and `meta.youtube_privacy`.
+only the ids on the chapter's resource item (`drive_id`, `youtube_id`) plus `url`:
+the YouTube `embed_url` for videos, the Drive `preview_url` otherwise.
 
 ## MongoDB (phoenix backend)
 
@@ -404,12 +404,12 @@ database using the exact shapes of `phoenix/app/models/ncert/*`:
 | `ncertquizquestions` | multiple-choice questions only (`answer_options`, exactly one correct, + `hint`); other question types NotebookLM produces are skipped |
 | `ncertflashcards` | every card (`card_type` 1 — NotebookLM doesn't send a type) |
 | `ncertmindmaps` | the tree, converted to `{title, root: {id, text, level, expanded, children}}` |
-| `ncertresources` | audio, video, slides PDF, chapter PDF (`url` = Drive `preview_url`), plus quiz / flashcard / mind-map entries with counts |
+| `ncertresources` | **one document per chapter**: `items` = audio, video, slides PDF, chapter PDF, infographic (`type: "image"`) (`key`, `type`, `title`, `url`, `drive_id`, `youtube_id`). Quiz / flashcards / mind map are not repeated here — read them from their own collections by `chapter_id` |
 
 Re-running is safe: records are matched on natural keys (class number, subject
 name, question text, card front…), so `_id`s never change; class/subject/book/
 chapter are only filled in on first creation, so edits made in the backend are
-kept. Pipeline-made resources carry `meta.source: "notebooklm-pipeline"`.
+kept. The chapter's `ncertresources` document is rewritten on every sync.
 Only `.json`, `.m4a`, `.mp4`, `.pdf` and `.png` files are downloaded and uploaded to
 Drive (`DOWNLOAD_FORMATS` / `DRIVE_EXTS` in `run.py`). Bump `SCHEMA_VERSION` in `mongo_sync.py`
 when changing the saved shapes, so every chapter re-syncs.
