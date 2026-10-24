@@ -303,11 +303,43 @@ async def test_notebook_delete_without_confirm_previews(mcp_call, mock_client) -
     mock_client.notebooks.delete.assert_not_called()
 
 
+async def test_notebook_delete_preview_shows_the_resolved_title(mcp_call, mock_client) -> None:
+    """A name resolved by the tiered matcher previews the REAL title (issue #2476)."""
+    mock_client.notebooks.list = AsyncMock(
+        return_value=[
+            FakeNotebook(id=NB_ID, title="İstanbul notları"),
+            FakeNotebook(id=NB2_ID, title="Other"),
+        ]
+    )
+    mock_client.notebooks.delete = AsyncMock(return_value=None)
+    result = await mcp_call("notebook_delete", {"notebook": "istanbul"})
+    assert result.structured_content == {
+        "status": "needs_confirmation",
+        "preview": {"action": "delete_notebook", "notebook_id": NB_ID, "title": "İstanbul notları"},
+    }
+    mock_client.notebooks.delete.assert_not_called()
+
+
 async def test_notebook_delete_with_confirm_deletes(mcp_call, mock_client) -> None:
     mock_client.notebooks.delete = AsyncMock(return_value=None)
     result = await mcp_call("notebook_delete", {"notebook": NB_ID, "confirm": True})
     assert result.structured_content == {"status": "deleted", "notebook_id": NB_ID}
     mock_client.notebooks.delete.assert_awaited_once_with(NB_ID)
+
+
+async def test_notebook_delete_uppercase_full_uuid_deletes_the_lowercase_id(
+    mcp_call, mock_client
+) -> None:
+    """The backend matches ids case-sensitively: an uppercase id is a silent no-op.
+
+    A live ``notebook_delete`` by an uppercase UUID reported ``deleted`` while the
+    notebook stayed, so the resolver must send the lowercase id.
+    """
+    hex_id = "b6ca69e0-75eb-4108-b727-769e48d26c4a"
+    mock_client.notebooks.delete = AsyncMock(return_value=None)
+    result = await mcp_call("notebook_delete", {"notebook": hex_id.upper(), "confirm": True})
+    assert result.structured_content == {"status": "deleted", "notebook_id": hex_id}
+    mock_client.notebooks.delete.assert_awaited_once_with(hex_id)
 
 
 async def test_notebook_delete_confirm_preview_then_delete(mcp_call, mock_client) -> None:
