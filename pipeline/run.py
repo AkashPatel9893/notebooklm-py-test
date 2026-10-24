@@ -85,6 +85,10 @@ from notebooklm import (
     RPCError,
     SlideDeckFormat,
     SlideDeckLength,
+    SourceNotFoundError,
+    SourceProcessingError,
+    SourceStatus,
+    SourceTimeoutError,
     UsageActionKind,
     UsageWindowKind,
 )
@@ -1045,21 +1049,52 @@ async def generate_row(
 
             # 3. Source. Reuse stored id; else adopt an already-uploaded source
             #    in the notebook; else upload. Always confirm it is READY.
-            if not row.get("source_id"):
-                existing = await client.sources.list(nb_id)
-                if existing:
-                    row["source_id"] = existing[0].id
-                    log.info("[%s] adopted existing source %s", key, sid(existing[0].id))
-                else:
-                    log.info("[%s] uploading source", key)
-                    src = await client.sources.add_file(
-                        nb_id, pdf_path, wait=True, wait_timeout=SOURCE_READY_TIMEOUT
+            #    If an existing source is in ERROR state or fails waiting,
+            #    clean it up and re-upload the PDF.
+            source_ready = False
+            src_id = row.get("source_id")
+            if src_id:
+                try:
+                    await client.sources.wait_until_ready(
+                        nb_id, src_id, timeout=SOURCE_READY_TIMEOUT
                     )
-                    row["source_id"] = src.id
+                    source_ready = True
+                except (SourceNotFoundError, SourceProcessingError, SourceTimeoutError) as err:
+                    log.warning("[%s] stored source %s unusable (%s) — replacing", key, sid(src_id), err)
+                    try:
+                        await client.sources.delete(nb_id, src_id)
+                    except Exception:
+                        pass
+                    row["source_id"] = ""
+                    await store.save()
+
+            if not source_ready:
+                existing = await client.sources.list(nb_id)
+                for s in existing:
+                    if s.status == SourceStatus.READY:
+                        row["source_id"] = s.id
+                        await store.save()
+                        log.info("[%s] adopted existing source %s", key, sid(s.id))
+                        source_ready = True
+                        break
+                    elif s.status == SourceStatus.ERROR:
+                        log.warning("[%s] deleting errored source %s", key, sid(s.id))
+                        try:
+                            await client.sources.delete(nb_id, s.id)
+                        except Exception:
+                            pass
+
+            if not source_ready:
+                log.info("[%s] uploading source", key)
+                src = await client.sources.add_file(
+                    nb_id, pdf_path, wait=True, wait_timeout=SOURCE_READY_TIMEOUT
+                )
+                row["source_id"] = src.id
                 await store.save()
-            await client.sources.wait_until_ready(
-                nb_id, row["source_id"], timeout=SOURCE_READY_TIMEOUT
-            )
+                await client.sources.wait_until_ready(
+                    nb_id, row["source_id"], timeout=SOURCE_READY_TIMEOUT
+                )
+
             log.info("[%s] source ready (%s)", key, sid(row["source_id"]))
             sids = [row["source_id"]]
             await ensure_chapter_title(client, store, row, key)
