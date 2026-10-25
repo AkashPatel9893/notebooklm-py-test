@@ -1177,6 +1177,7 @@ async def generate_row(
                         log.warning("[%s] %s RATE-LIMITED — will retry", key, name)
                     else:
                         row[f"{name}_gen"] = "failed"
+                        row[f"{name}_id"] = ""
                         row["gen_error"] = f"{name}: {e}"[:500]
                         log.error("[%s] %s FAILED: %s", key, name, e)
                 finally:
