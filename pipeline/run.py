@@ -135,6 +135,12 @@ INFOGRAPHIC_STYLE = InfographicStyle.INSTRUCTIONAL
 INFOGRAPHIC_ORIENTATION = InfographicOrientation.PORTRAIT
 INFOGRAPHIC_DETAIL = InfographicDetail.STANDARD
 
+CHAPTER_THUMBNAIL_INSTRUCTIONS = (
+    "Create a bold, visually striking 16:9 chapter cover thumbnail. "
+    "Focus on the core visual concept or theme of this chapter in a clean, modern, minimalist educational style. "
+    "Ensure high contrast, clean visual composition, and prominent, readable chapter theme suited for a course cover."
+)
+
 # Which artifacts to generate per chapter. Any subset of ARTIFACT_SPECS keys.
 ARTIFACTS: list[str] = [
     "quiz",
@@ -160,7 +166,7 @@ FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "p
 # files. Each chapter folder also gets a local drive.json with every uploaded
 # file's id and share links, for the backend. Set DRIVE_EXTS to a set of
 # extensions (e.g. {".m4a", ".mp4", ".pdf"}) to upload only those; None = all.
-DRIVE_EXTS: set[str] | None = {".json", ".m4a", ".mp4", ".pdf", ".png"}
+DRIVE_EXTS: set[str] | None = {".json", ".m4a", ".mp4", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 DRIVE_MANIFEST = "drive.json"
 
 # Videos go to YouTube instead of Drive (public/unlisted/private from
@@ -328,6 +334,17 @@ async def _gen_infographic(c: NotebookLMClient, nb: str, sids: list[str]) -> str
     return s.task_id
 
 
+async def _gen_chapter_thumbnail(c: NotebookLMClient, nb: str, sids: list[str]) -> str:
+    s = await c.artifacts.generate_infographic(
+        nb, sids, LANGUAGE,
+        instructions=CHAPTER_THUMBNAIL_INSTRUCTIONS,
+        orientation=InfographicOrientation.LANDSCAPE,
+        detail_level=InfographicDetail.CONCISE,
+        style=InfographicStyle.PROFESSIONAL,
+    )
+    return s.task_id
+
+
 async def _gen_slide_deck(c: NotebookLMClient, nb: str, sids: list[str]) -> str:
     s = await c.artifacts.generate_slide_deck(
         nb, sids, LANGUAGE,
@@ -419,6 +436,16 @@ ARTIFACT_SPECS: dict[str, dict[str, Any]] = {
         "timeout": 1200.0,
         "sync_gen": False,
         "type": ArtifactType.INFOGRAPHIC,
+        "filter_artifact": lambda a: not _is_landscape_infographic(a),
+    },
+    "chapter_thumbnail": {
+        "generate": _gen_chapter_thumbnail,
+        "download": lambda c, nb, p, aid, fmt=None: c.artifacts.download_infographic(nb, p, aid),
+        "filename": "chapter_thumbnail.png",
+        "timeout": 1200.0,
+        "sync_gen": False,
+        "type": ArtifactType.INFOGRAPHIC,
+        "filter_artifact": lambda a: _is_landscape_infographic(a),
     },
     "slide_deck": {
         "generate": _gen_slide_deck,
@@ -450,6 +477,7 @@ USAGE_KIND: dict[str, UsageActionKind] = {
     "video": UsageActionKind.VIDEO_OVERVIEW,
     "cinematic_video": UsageActionKind.BREAKDOWNS_VIDEO,  # meter code 3 = cinematic
     "infographic": UsageActionKind.INFOGRAPHIC,
+    "chapter_thumbnail": UsageActionKind.INFOGRAPHIC,
     "slide_deck": UsageActionKind.SLIDES,
     "data_table": UsageActionKind.TABLES,
 }
@@ -464,7 +492,7 @@ NO_CINEMATIC_TIERS = {1, 4}
 # schema follows on the next write (old columns are dropped, new ones added).
 # --------------------------------------------------------------------------- #
 
-SHEET_COLS = ["class", "subject", "book", "chapter", "pdf_url", "book_index_url"]
+SHEET_COLS = ["class", "subject", "book", "chapter", "pdf_url", "book_index_url", "thumbnail_url"]
 BASE_COLS = [
     "notebook_id", "source_id", "chapter_title",
     "gen_status", "gen_attempts", "gen_error",
@@ -575,6 +603,7 @@ class Store:
                 "chapter": (raw.get("Chapter") or "").strip(),
                 "pdf_url": (raw.get("PDF URL") or "").strip(),
                 "book_index_url": (raw.get("Book Index URL") or "").strip(),
+                "thumbnail_url": (raw.get("Thumbnail URL") or raw.get("thumbnail_url") or "").strip(),
             }
             if not row["class"] or not row["chapter"]:
                 continue
@@ -623,6 +652,8 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML
 def _url_candidates(url: str) -> list[str]:
     """Return host variants to try. Some hosts (e.g. ncert.nic.in) reset the
     bare apex but serve fine on the www. subdomain — try both."""
+    if "ncert.nic.in" in url and "://www." not in url:
+        return [url.replace("://", "://www.", 1), url]
     cands = [url]
     if "://www." in url:
         cands.append(url.replace("://www.", "://", 1))
@@ -631,14 +662,14 @@ def _url_candidates(url: str) -> list[str]:
     return cands
 
 
-async def download_pdf(url: str, dest: Path) -> None:
+async def download_file(url: str, dest: Path) -> None:
     if dest.exists() and dest.stat().st_size > 0:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     headers = {"User-Agent": _UA}
     last_err: Exception | None = None
-    async with httpx.AsyncClient(follow_redirects=True, timeout=120.0, headers=headers) as hc:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20.0, headers=headers) as hc:
         for cand in _url_candidates(url):
             try:
                 async with hc.stream("GET", cand) as resp:
@@ -651,11 +682,79 @@ async def download_pdf(url: str, dest: Path) -> None:
             except Exception as e:  # noqa: BLE001 — try next candidate
                 last_err = e
                 tmp.unlink(missing_ok=True)
-    raise RuntimeError(f"PDF download failed for {url}: {type(last_err).__name__}: {last_err}")
+    raise RuntimeError(f"Download failed for {url}: {type(last_err).__name__}: {last_err}")
+
+
+download_pdf = download_file
+download_thumbnail = download_file
+
+
+def extract_video_thumbnail(cdir: Path) -> Path | None:
+    """Extract a 16:9 video frame from the best available video in cdir using ffmpeg.
+
+    Priority: cinematic_video.mp4 > video.mp4.
+    Only extracts when a REAL video overview exists (never from audio_video.mp4).
+    Saves to cdir / "video_thumbnail.jpg".
+    """
+    candidates = ["cinematic_video.mp4", "video.mp4"]
+    target_vid: Path | None = None
+    for c in candidates:
+        vp = cdir / c
+        if vp.is_file() and vp.stat().st_size > 0:
+            target_vid = vp
+            break
+    if not target_vid:
+        return None
+    out = cdir / "video_thumbnail.jpg"
+    if out.exists() and out.stat().st_size > 0:
+        return out
+    try:
+        audio_video.extract_frame(target_vid, out)
+        log.info("🎞 Extracted video frame %s → %s", target_vid.name, out.name)
+        return out
+    except Exception as e:
+        log.debug("Frame extraction from %s failed: %s", target_vid.name, e)
+    return None
+
+
+def extract_chapter_thumbnail(cdir: Path, force: bool = False) -> Path | None:
+    """Extract page 1 of the chapter source PDF as chapter_thumbnail.png.
+
+    Uses pypdfium2 for high-fidelity rendering of the chapter title/cover page.
+    Saves to cdir / "chapter_thumbnail.png".
+    """
+    pdf_path = cdir / "source.pdf"
+    if not (pdf_path.is_file() and pdf_path.stat().st_size > 0):
+        return None
+    out = cdir / "chapter_thumbnail.png"
+    if out.exists() and out.stat().st_size > 0 and not force:
+        return out
+    try:
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(pdf_path)
+        if len(pdf) < 1:
+            return None
+        page = pdf[0]
+        # scale=2.0 renders at ~144 DPI (sharp, high-DPI rendering for web & mobile)
+        image = page.render(scale=2.0).to_pil()
+        image.save(out, "PNG", optimize=True)
+        log.info("📄 Extracted PDF page 1 → %s (%s)", out.name, f"{out.stat().st_size / 1024:.0f} KB")
+        return out
+    except Exception as e:
+        log.warning("[%s] Failed to extract PDF page 1: %s", cdir.name, e)
+        return None
+
+
+def _is_landscape_infographic(a: Any) -> bool:
+    for ig in getattr(a, "infographics", ()):
+        if ig.width and ig.height:
+            return ig.width > ig.height
+    text = f"{getattr(a, 'title', '')} {getattr(a, 'generation_prompt', '')}".lower()
+    return "thumbnail" in text or "landscape" in text or "cover" in text
 
 
 async def find_existing_artifact(
-    client: NotebookLMClient, nb_id: str, spec: dict[str, Any]
+    client: NotebookLMClient, nb_id: str, spec: dict[str, Any], known_id: str | None = None
 ) -> Any | None:
     """Ask NotebookLM whether this artifact already exists in the notebook.
 
@@ -666,9 +765,16 @@ async def find_existing_artifact(
     exist, so a fresh generation (i.e. a real retry) proceeds.
     """
     arts = await client.artifacts.list(nb_id, spec["type"])
+    if known_id:
+        match = next((a for a in arts if a.id == known_id), None)
+        if match:
+            return match
     sub = spec.get("report_subtype")
     if sub:
         arts = [a for a in arts if getattr(a, "report_subtype", None) == sub]
+    filter_fn = spec.get("filter_artifact")
+    if filter_fn:
+        arts = [a for a in arts if filter_fn(a)]
     if not arts:
         return None
     completed = [a for a in arts if a.is_completed]
@@ -1030,6 +1136,15 @@ async def generate_row(
             pdf_path = chapter_dir(row) / "source.pdf"
             log.info("[%s] downloading PDF", key)
             await download_pdf(row["pdf_url"], pdf_path)
+            extract_chapter_thumbnail(chapter_dir(row))
+
+            if row.get("thumbnail_url"):
+                thumb_path = chapter_dir(row) / "thumbnail.jpg"
+                if not (thumb_path.exists() and thumb_path.stat().st_size > 0):
+                    try:
+                        await download_thumbnail(row["thumbnail_url"], thumb_path)
+                    except Exception as e:
+                        log.warning("[%s] thumbnail download failed: %s", key, e)
 
             # 2. Notebook. Reuse our stored id; else adopt an existing notebook
             #    with the same title (recovers from a crash right after create);
@@ -1122,7 +1237,7 @@ async def generate_row(
                     continue
                 spec = ARTIFACT_SPECS[name]
                 try:
-                    existing_art = await find_existing_artifact(client, nb_id, spec)
+                    existing_art = await find_existing_artifact(client, nb_id, spec, row.get(f"{name}_id"))
                     if existing_art is not None and existing_art.is_completed:
                         row[f"{name}_id"] = existing_art.id
                         row[f"{name}_gen"] = "done"
@@ -1847,6 +1962,8 @@ async def download_artifact(
         row[f"{name}_dl"] = "done"
         if saved:
             log.info("[%s] downloaded %s → %s done", key, name, ", ".join(saved))
+            if name in ("video", "cinematic_video"):
+                extract_video_thumbnail(cdir)
         return True
     except Exception as e:  # noqa: BLE001 — record + continue; `download` phase retries
         row[f"{name}_dl"] = "failed"
@@ -1894,6 +2011,17 @@ async def download_row(
         for name in downloadable:
             if not download_complete(row, name):
                 await download_artifact(client, store, row, name, key)
+
+        if row.get("thumbnail_url"):
+            thumb_path = chapter_dir(row) / "thumbnail.jpg"
+            if not (thumb_path.exists() and thumb_path.stat().st_size > 0):
+                try:
+                    await download_thumbnail(row["thumbnail_url"], thumb_path)
+                except Exception as e:
+                    log.warning("[%s] thumbnail download failed: %s", key, e)
+
+        extract_chapter_thumbnail(chapter_dir(row))
+        extract_video_thumbnail(chapter_dir(row))
 
         row["dl_status"] = roll_up(row, "dl", downloadable)
         row["updated_at"] = now()
@@ -2236,6 +2364,79 @@ def cmd_sync(_: argparse.Namespace) -> None:
     added = store.sync_from_sheet()
     print(f"Synced sheet → {PROGRESS_CSV} ({added} new row(s), {len(store.rows)} total)")
 
+    downloaded = 0
+    for row in store.rows.values():
+        thumb_url = (row.get("thumbnail_url") or "").strip()
+        if not thumb_url:
+            continue
+        thumb_dest = chapter_dir(row) / "thumbnail.jpg"
+        if not (thumb_dest.exists() and thumb_dest.stat().st_size > 0):
+            try:
+                asyncio.run(download_thumbnail(thumb_url, thumb_dest))
+                downloaded += 1
+            except Exception as e:
+                log.debug("[%s] thumbnail download deferred: %s", row_key(row), e)
+    if downloaded:
+        print(f"Downloaded {downloaded} thumbnail(s) to output/")
+
+    cthumb_count = 0
+    for row in store.rows.values():
+        cth = extract_chapter_thumbnail(chapter_dir(row))
+        if cth:
+            cthumb_count += 1
+    if cthumb_count:
+        print(f"Extracted/verified {cthumb_count} chapter PDF thumbnail(s)")
+
+    vthumb_count = 0
+    for row in store.rows.values():
+        vth = extract_video_thumbnail(chapter_dir(row))
+        if vth:
+            vthumb_count += 1
+    if vthumb_count:
+        print(f"Extracted/verified {vthumb_count} video thumbnail(s)")
+
+    try:
+        import mongo_sync
+        db = mongo_sync.connect()
+        updated_books = 0
+        now_dt = mongo_sync._now()
+        for row in store.rows.values():
+            cdir = chapter_dir(row)
+            drive_manifest = load_drive_manifest(cdir)
+            thumb = (row.get("thumbnail_url") or "").strip()
+            book_name = (row.get("book") or row.get("subject") or "").strip()
+            chapter_no = mongo_sync._num(row.get("chapter") or "")
+            if thumb and book_name:
+                res = db[mongo_sync.C["book"]].update_many(
+                    {"name": book_name},
+                    {"$set": {"thumbnail_url": thumb, "updated_at": now_dt},
+                     "$unset": {"image": ""}}
+                )
+                if res.modified_count > 0:
+                    updated_books += res.modified_count
+                if chapter_no is not None:
+                    ch_entry = drive_manifest.get("chapter_thumbnail.png") or drive_manifest.get("chapter_thumbnail.jpg") or {}
+                    ch_thumb = (ch_entry.get("preview_url")
+                                or ch_entry.get("view_url")
+                                or "").strip()
+                    book_doc = db[mongo_sync.C["book"]].find_one({"name": book_name})
+                    if book_doc:
+                        if ch_thumb:
+                            db[mongo_sync.C["chapter"]].update_many(
+                                {"book_id": book_doc["_id"], "chapter_number": chapter_no},
+                                {"$set": {"thumbnail_url": ch_thumb, "updated_at": now_dt},
+                                 "$unset": {"image": ""}}
+                            )
+                        else:
+                            db[mongo_sync.C["chapter"]].update_many(
+                                {"book_id": book_doc["_id"], "chapter_number": chapter_no},
+                                {"$unset": {"image": "", "thumbnail_url": ""}}
+                            )
+        if updated_books:
+            print(f"Updated {updated_books} book thumbnail(s) in MongoDB")
+    except Exception as e:
+        log.debug("MongoDB book thumbnail update skipped: %s", e)
+
 
 # --------------------------------------------------------------------------- #
 # CLI
@@ -2278,7 +2479,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
 
 SHORT_NAME = {"study_guide": "study", "flashcards": "flash", "mind_map": "mind",
               "slide_deck": "slide", "cinematic_video": "cine", "infographic": "info",
-              "data_table": "table"}
+              "chapter_thumbnail": "thumb", "data_table": "table"}
 CELL = {"done": ("✓", "bold green"), "failed": ("✗", "bold red"),
         "rate_limited": ("⏸", "yellow"), "": ("·", "bright_black")}
 STATUS_STYLE = {"done": "green", "partial": "yellow", "rate_limited": "yellow",

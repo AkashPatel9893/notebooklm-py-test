@@ -5,3 +5,4 @@ google-auth-oauthlib>=1.2
 python-dotenv>=1.0
 pymongo>=4.6
 pillow>=10.1  # audio_video.py title card
+pypdfium2>=4.30.0  # extract PDF page 1 for chapter thumbnails

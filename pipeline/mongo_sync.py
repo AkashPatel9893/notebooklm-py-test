@@ -40,7 +40,7 @@ from typing import Any
 
 PIPELINE = "notebooklm-pipeline"
 # Bump when the document shapes written here change, so every chapter re-syncs.
-SCHEMA_VERSION = "5"  # 5: + infographic item (4: one resources document per chapter)
+SCHEMA_VERSION = "9"  # 9: + subject image & thumbnail_url
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
 CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
@@ -65,6 +65,9 @@ FILE_RESOURCES = {
     "slides.pdf": ("slides", "pdf", "Slides"),
     "source.pdf": ("source_pdf", "pdf", "NCERT Chapter PDF"),
     "infographic.png": ("infographic", "image", "Infographic"),
+    "chapter_thumbnail.png": ("chapter_thumbnail", "image", "Chapter Thumbnail"),
+    "video_thumbnail.jpg": ("video_thumbnail", "image", "Video Thumbnail"),
+    "thumbnail.jpg": ("thumbnail", "image", "Thumbnail"),
 }
 
 # Files that reach YouTube as a different local file (audio_video.py).
@@ -231,6 +234,8 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     # Only what can't be derived: Drive view/download links and YouTube watch/
     # embed links all follow from the ids.
     items = []
+    vthumb_info = drive.get("video_thumbnail.jpg")
+    vthumb_url = (vthumb_info.get("preview_url") or vthumb_info.get("view_url") if vthumb_info else "")
     for fname, (key, rtype, label) in FILE_RESOURCES.items():
         info, yt = drive.get(fname), youtube.get(YOUTUBE_ALIASES.get(fname, fname))
         if not (info or yt):
@@ -243,6 +248,10 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
             item["drive_id"] = info.get("id")
         if yt:
             item["youtube_id"] = yt.get("id")
+            if rtype == "video":
+                item["thumbnail_url"] = f"https://i.ytimg.com/vi/{yt.get('id')}/hqdefault.jpg"
+        elif rtype == "video" and vthumb_url:
+            item["thumbnail_url"] = vthumb_url
         items.append(item)
 
     summary = {"title": title, "quiz": len(quiz), "flashcards": len(cards),
@@ -259,9 +268,36 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     book_id = _upsert_insert_only(db[C["book"]], {"subject_id": subject_id, "name": book_name},
                                   {"part_number": _part_number(book_name),
                                    "display_order": _part_number(book_name) or 0})
+    book_thumb_url = (drive.get("thumbnail.jpg", {}).get("preview_url")
+                      or drive.get("thumbnail.jpg", {}).get("view_url")
+                      or row.get("thumbnail_url") or "").strip()
+    if book_thumb_url:
+        db[C["book"]].update_one(
+            {"_id": book_id},
+            {"$set": {"thumbnail_url": book_thumb_url, "updated_at": now},
+             "$unset": {"image": ""}}
+        )
+
+    # Chapter thumbnail: strictly extracted first page of chapter PDF (never book cover)
+    ch_thumb_entry = drive.get("chapter_thumbnail.png") or drive.get("chapter_thumbnail.jpg") or {}
+    chapter_thumb_url = (ch_thumb_entry.get("preview_url")
+                         or ch_thumb_entry.get("view_url")
+                         or "").strip()
+
     chapter_id = _upsert_insert_only(db[C["chapter"]],
                                      {"book_id": book_id, "chapter_number": chapter_no},
                                      {"title": title, "display_order": chapter_no})
+    if chapter_thumb_url:
+        db[C["chapter"]].update_one(
+            {"_id": chapter_id},
+            {"$set": {"thumbnail_url": chapter_thumb_url, "updated_at": now},
+             "$unset": {"image": ""}}
+        )
+    else:
+        db[C["chapter"]].update_one(
+            {"_id": chapter_id},
+            {"$unset": {"image": "", "thumbnail_url": ""}}
+        )
 
     if quiz:
         # Fields schema version 2 wrote for the other question types.

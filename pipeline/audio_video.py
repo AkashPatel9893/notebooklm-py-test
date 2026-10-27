@@ -132,3 +132,27 @@ def make(cdir: Path, title: str, subtitle: str) -> Path:
         raise AudioVideoError(f"ffmpeg failed: {r.stderr.strip()[-500:]}")
     os.replace(tmp, out)
     return out
+
+
+def extract_frame(video_path: Path, out_path: Path, timestamp: str = "00:00:03") -> Path:
+    """Extract a single frame from video_path and save to out_path using ffmpeg."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise AudioVideoError("ffmpeg isn't installed (brew install ffmpeg)")
+    tmp = out_path.parent / f".{out_path.name}.tmp.jpg"
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", timestamp, "-i", str(video_path),
+        "-vframes", "1", "-q:v", "2", str(tmp),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        # Try at 00:00:01 in case the video is short
+        cmd[4] = "00:00:01"
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            raise AudioVideoError(f"ffmpeg frame extract failed: {r.stderr.strip()[-500:]}")
+    os.replace(tmp, out_path)
+    return out_path
