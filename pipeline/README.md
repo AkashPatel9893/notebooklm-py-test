@@ -198,15 +198,14 @@ and local downloads are unaffected.
 ### 3. YouTube
 
 `video.mp4` and `cinematic_video.mp4` (the `YOUTUBE_FILES` list in `run.py`)
-are uploaded to YouTube **instead of Drive** as soon as they're saved, and
-their links are written to `youtube.json` and to MongoDB. Until you've run
-`youtube-login` (or with `--no-youtube`) they go to Drive as before.
+are uploaded to YouTube as soon as they're saved, and
+their links are written to `youtube.json` and to MongoDB.
 The audio overview goes too: YouTube won't take audio alone, so `audio.m4a`
 is turned into `audio_video.mp4` (the audio over a generated title card, see
 `audio_video.py`; needs `ffmpeg` and Pillow — plus `brew install libraqm`
 for Hindi/Sanskrit/Urdu chapter titles, else their card shows the English
-"Subject · Chapter" instead). `audio.m4a` itself still goes to
-Drive, and MongoDB's audio item keeps its Drive link plus the YouTube id.
+"Subject · Chapter" instead). Neither audio, video, nor `.json` files are
+uploaded to Drive; audio and video are hosted on YouTube.
 Titles read `<chapter title> | Class 11 · Chemistry · Chapter 1 (Audio)`; the
 description lists class, subject, book, chapter and hashtags (no links). Each video goes into a playlist per class + subject (`NCERT Class
 11 Chemistry`, created on first use; ids cached in `.youtube_playlists.json`),
@@ -385,13 +384,12 @@ output/                                   Google Drive: My Drive / Lernoverse NC
 ```
 
 Extra formats are set by `DOWNLOAD_FORMATS` at the top of `run.py`; which files
-go to Drive by `DRIVE_EXTS` (default: all). `drive.json` holds, per file,
-`view_url` (open in browser), `preview_url` (embed in an `<iframe>` — use this
-for audio/video in the app) and `download_url` (raw file; unreliable for large
-files). `youtube.json` holds, per video, `url` (youtu.be link), `embed_url`
-(for an `<iframe>`) and `privacy` (what YouTube actually applied). MongoDB saves
-only the ids on the chapter's resource item (`drive_id`, `youtube_id`) plus `url`:
-the YouTube `embed_url` for videos, the Drive `preview_url` otherwise.
+go to Drive by `DRIVE_EXTS` (default: PDFs, thumbnails, and images). `.json` files,
+audio, and video files are excluded from Drive uploads. `drive.json` holds, per file,
+`view_url` (open in browser), `preview_url` (embed in an `<iframe>`) and `download_url`
+(raw file; unreliable for large files). `youtube.json` holds, per video, `url` (youtu.be link),
+`embed_url` (for an `<iframe>`) and `privacy` (what YouTube actually applied). MongoDB saves
+the YouTube `embed_url` for audio/video, and the Drive `preview_url` for documents/images.
 
 ## MongoDB (phoenix backend)
 
@@ -410,9 +408,8 @@ Re-running is safe: records are matched on natural keys (class number, subject
 name, question text, card front…), so `_id`s never change; class/subject/book/
 chapter are only filled in on first creation, so edits made in the backend are
 kept. The chapter's `ncertresources` document is rewritten on every sync.
-Only `.json`, `.m4a`, `.mp4`, `.pdf` and `.png` files are downloaded and uploaded to
-Drive (`DOWNLOAD_FORMATS` / `DRIVE_EXTS` in `run.py`). Bump `SCHEMA_VERSION` in `mongo_sync.py`
-when changing the saved shapes, so every chapter re-syncs.
+Only documents and images (PDFs, PNG, JPG, WebP) are uploaded to Drive (`DRIVE_EXTS` in `run.py`).
+Bump `SCHEMA_VERSION` in `mongo_sync.py` when changing the saved shapes, so every chapter re-syncs.
 
 ## Notes
 

@@ -141,12 +141,15 @@ python run.py all
 
 ## 7. Google Drive mirror
 
-Drive gets an exact copy of `output/` — same folders, same files:
+Drive mirrors documents and images from `output/` (PDFs, thumbnails, infographics):
 
 ```
-output/Class 11/Chemistry/Chapter 1/quiz.json
-  →  My Drive / Lernoverse NCERT / Class 11 / Chemistry / Chapter 1 / quiz.json
+output/Class 11/Chemistry/Chapter 1/slides.pdf
+  →  My Drive / Lernoverse NCERT / Class 11 / Chemistry / Chapter 1 / slides.pdf
 ```
+
+> **Note:** `.json` files, audio, and video files are **never** uploaded to Drive.
+> Videos and audio overviews go to YouTube; JSON data (quizzes, flashcards, mind maps) is stored in MongoDB.
 
 Every file is shared "anyone with the link can view". Each local chapter folder
 gets a `drive.json` with the file ids and links (for the backend). Until you
@@ -193,13 +196,14 @@ python run.py youtube-login     # sign in with the account that owns the channel
 python run.py youtube           # upload videos already on disk / retry failed ones
 ```
 
-Once signed in, videos go to YouTube **instead of** Drive. `YOUTUBE_PRIVACY` in
+Videos and audio overviews go to YouTube. `YOUTUBE_PRIVACY` in
 `.env` (`public` / `unlisted` / `private`) controls every video — change it and
 re-run `python run.py youtube` to update the ones already uploaded. Turn YouTube
-off for one run with `--no-youtube` (videos then go to Drive). Uploads stay
+off for one run with `--no-youtube`. Uploads stay
 private until Google audits the API project; the free quota allows ~6 a day.
 The audio overview goes up as `audio_video.mp4` (the audio over a title card,
-built with ffmpeg — YouTube won't take audio alone); `audio.m4a` stays on Drive.
+built with ffmpeg — YouTube won't take audio alone). Audio, video, and .json
+files are not uploaded to Drive.
 
 > While the OAuth app is in *Testing* mode, Google expires the sign-in after
 > 7 days — just run `python run.py drive-login` again when the log says so.

@@ -14,8 +14,10 @@ it created itself — nothing else in your Drive.
 
 Files land in a folder tree mirroring ``output/`` file-for-file:
 
-    output/Class 11/Chemistry/Chapter 1/quiz.json
-      →  My Drive / Lernoverse NCERT / Class 11 / Chemistry / Chapter 1 / quiz.json
+    output/Class 11/Chemistry/Chapter 1/slides.pdf
+      →  My Drive / Lernoverse NCERT / Class 11 / Chemistry / Chapter 1 / slides.pdf
+
+(.json files, audio, and video files are excluded from Drive uploads)
 
 and are shared "anyone with the link can view", so the links work for students
 without signing in.
@@ -48,6 +50,22 @@ CHUNK = 8 * 1024 * 1024  # resumable-upload chunk size
 
 mimetypes.add_type("audio/mp4", ".m4a")
 mimetypes.add_type("text/markdown", ".md")
+
+AUDIO_EXTS: set[str] = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".opus"}
+VIDEO_EXTS: set[str] = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v", ".3gp"}
+FORBIDDEN_DRIVE_EXTS: set[str] = {".json"} | AUDIO_EXTS | VIDEO_EXTS
+
+
+def is_upload_allowed(path: Path | str) -> bool:
+    """True if the file can be uploaded to Drive (rejects .json, audio, and video files)."""
+    p = Path(path)
+    ext = p.suffix.lower()
+    if ext == ".json" or ext in FORBIDDEN_DRIVE_EXTS:
+        return False
+    mime = mimetypes.guess_type(p.name)[0] or ""
+    if mime.startswith(("audio/", "video/")) or mime == "application/json":
+        return False
+    return True
 
 
 class DriveNotConfigured(RuntimeError):
@@ -191,6 +209,11 @@ class Drive:
         target folder, nothing is sent. ``on_progress(sent_bytes, total_bytes)``
         is called after every chunk (called from this worker thread).
         """
+        if not is_upload_allowed(path):
+            raise ValueError(
+                f"Drive upload forbidden for '{path.name}': .json, audio, and video files are not uploaded to Drive."
+            )
+
         from googleapiclient.http import MediaFileUpload
 
         md5 = md5 or file_md5(path)

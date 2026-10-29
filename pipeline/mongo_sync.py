@@ -60,7 +60,6 @@ C = {
 # Files not listed (slides.pptx, *.json, *.html, *.md) are not written.
 FILE_RESOURCES = {
     "audio.m4a": ("audio", "audio", "Audio Overview"),
-    "video.mp4": ("video", "video", "Video Overview"),
     "cinematic_video.mp4": ("cinematic_video", "video", "Cinematic Video"),
     "slides.pdf": ("slides", "pdf", "Slides"),
     "source.pdf": ("source_pdf", "pdf", "NCERT Chapter PDF"),
@@ -237,12 +236,13 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     vthumb_info = drive.get("video_thumbnail.jpg")
     vthumb_url = (vthumb_info.get("preview_url") or vthumb_info.get("view_url") if vthumb_info else "")
     for fname, (key, rtype, label) in FILE_RESOURCES.items():
-        info, yt = drive.get(fname), youtube.get(YOUTUBE_ALIASES.get(fname, fname))
+        # Audio and video files are hosted on YouTube, never on Drive
+        info = None if rtype in ("audio", "video") else drive.get(fname)
+        yt = youtube.get(YOUTUBE_ALIASES.get(fname, fname))
         if not (info or yt):
             continue
-        # `url` is what the app embeds: the YouTube player for videos, the Drive
-        # preview otherwise (audio keeps its Drive file when it has one).
-        url = yt.get("embed_url") if yt and (rtype == "video" or not info) else info.get("preview_url")
+        # `url` is what the app embeds: YouTube embed player for audio/video, Drive preview otherwise
+        url = yt.get("embed_url") if yt else (info.get("preview_url") if info else None)
         item = {"key": key, "type": rtype, "title": label, "url": url}
         if info:
             item["drive_id"] = info.get("id")

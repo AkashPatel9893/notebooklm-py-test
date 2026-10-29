@@ -42,6 +42,7 @@ import asyncio
 import csv
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -162,32 +163,37 @@ DOWNLOAD_FORMATS: dict[str, list[str]] = {
 }
 FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "pptx": "pptx"}
 
-# Google Drive mirrors output/ exactly: same Class/Subject/Chapter folders, same
-# files. Each chapter folder also gets a local drive.json with every uploaded
-# file's id and share links, for the backend. Set DRIVE_EXTS to a set of
-# extensions (e.g. {".m4a", ".mp4", ".pdf"}) to upload only those; None = all.
-DRIVE_EXTS: set[str] | None = {".json", ".m4a", ".mp4", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+# Google Drive mirrors output/ for documents and images (PDFs, thumbnails,
+# infographics). JSON files, audio, and video files are excluded from Drive uploads
+# (videos/audio go to YouTube; JSON quiz/flashcards/mind maps are saved to MongoDB).
+# Set DRIVE_EXTS to a set of extensions to upload only those; None = all allowed.
+DRIVE_EXTS: set[str] | None = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 DRIVE_MANIFEST = "drive.json"
 
-# Videos go to YouTube instead of Drive (public/unlisted/private from
-# YOUTUBE_PRIVACY in .env); each chapter folder gets a local youtube.json with
-# every video's id and links, and MongoDB saves them on the matching resource.
-# Without a YouTube sign-in (or with --no-youtube) they go to Drive as before.
-# Each upload costs ~1,600 of the 10,000 daily API quota units, so only list
-# files worth that.
+# File extensions strictly forbidden from Drive uploads
+DRIVE_FORBIDDEN_EXTS: set[str] = {
+    # JSON files
+    ".json",
+    # Audio files
+    ".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".opus",
+    # Video files
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v", ".3gp",
+}
+
+# Videos go to YouTube (public/unlisted/private from YOUTUBE_PRIVACY in .env);
+# each chapter folder gets a local youtube.json with every video's id and links,
+# and MongoDB saves them on the matching resource.
+# Each upload costs ~1,600 of the 10,000 daily API quota units.
 YOUTUBE_FILES: dict[str, str] = {
-    "video.mp4": "Video Overview",
     "cinematic_video.mp4": "Cinematic Video",
-    # audio.m4a over a title card (audio_video.py) — YouTube won't take audio
-    # alone. Built only for YouTube; audio.m4a itself still goes to Drive.
+    # audio.m4a over a title card (audio_video.py) — YouTube won't take audio alone.
     audio_video.VIDEO: "Audio Overview",
 }
 YOUTUBE_MANIFEST = "youtube.json"
 
 
 # Title suffix telling a chapter's videos apart in the channel's list.
-YOUTUBE_LABELS = {"Video Overview": "Video", "Cinematic Video": "Cinematic",
-                  "Audio Overview": "Audio"}
+YOUTUBE_LABELS = {"Cinematic Video": "Cinematic", "Audio Overview": "Audio"}
 
 
 def youtube_playlist(row: dict[str, str]) -> tuple[str, str]:
@@ -692,18 +698,11 @@ download_thumbnail = download_file
 def extract_video_thumbnail(cdir: Path) -> Path | None:
     """Extract a 16:9 video frame from the best available video in cdir using ffmpeg.
 
-    Priority: cinematic_video.mp4 > video.mp4.
-    Only extracts when a REAL video overview exists (never from audio_video.mp4).
+    Only extracts when a cinematic video overview exists (never from audio_video.mp4).
     Saves to cdir / "video_thumbnail.jpg".
     """
-    candidates = ["cinematic_video.mp4", "video.mp4"]
-    target_vid: Path | None = None
-    for c in candidates:
-        vp = cdir / c
-        if vp.is_file() and vp.stat().st_size > 0:
-            target_vid = vp
-            break
-    if not target_vid:
+    target_vid = cdir / "cinematic_video.mp4"
+    if not (target_vid.is_file() and target_vid.stat().st_size > 0):
         return None
     out = cdir / "video_thumbnail.jpg"
     if out.exists() and out.stat().st_size > 0:
@@ -1320,26 +1319,46 @@ async def generate_row(
 # --------------------------------------------------------------------------- #
 
 
-# True when videos go to YouTube, so Drive leaves them out (re-set per run by
-# use_youtube; the default keeps `status` consistent with what runs upload).
+# True when videos go to YouTube (re-set per run by use_youtube).
 VIDEOS_ON_YOUTUBE = youtube_upload.configured()
+
+
+def is_drive_filename(name: str) -> bool:
+    """Return True if filename is eligible for Google Drive upload.
+
+    Strictly excludes any .json file, audio file, or video file.
+    """
+    if name.startswith("."):
+        return False
+    ext = Path(name).suffix.lower()
+    if ext == ".json" or ext in DRIVE_FORBIDDEN_EXTS:
+        return False
+    mime = mimetypes.guess_type(name)[0] or ""
+    if mime.startswith(("audio/", "video/")) or mime == "application/json":
+        return False
+    if DRIVE_EXTS is not None and ext not in DRIVE_EXTS:
+        return False
+    return True
+
+
+def is_drive_file(f: Path) -> bool:
+    """Return True if path is a file eligible for Google Drive upload."""
+    return f.is_file() and is_drive_filename(f.name)
 
 
 def drive_files(cdir: Path) -> list[Path]:
     if not cdir.is_dir():
         return []
     skip = {DRIVE_MANIFEST, YOUTUBE_MANIFEST, mongo_sync.MARKER, audio_video.VIDEO}
-    if VIDEOS_ON_YOUTUBE:
-        skip |= set(YOUTUBE_FILES)
     return sorted(f for f in cdir.iterdir()
-                  if f.is_file() and not f.name.startswith(".")
-                  and f.name not in skip
-                  and (DRIVE_EXTS is None or f.suffix.lower() in DRIVE_EXTS))
+                  if f.name not in skip and is_drive_file(f))
 
 
 def load_drive_manifest(cdir: Path) -> dict[str, Any]:
     try:
-        return json.loads((cdir / DRIVE_MANIFEST).read_text(encoding="utf-8"))
+        manifest = json.loads((cdir / DRIVE_MANIFEST).read_text(encoding="utf-8"))
+        # Only retain entries for allowed Drive files (excludes historical .json, audio, video)
+        return {k: v for k, v in manifest.items() if is_drive_filename(k)}
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -1522,7 +1541,7 @@ YOUTUBE_MAX_UNVERIFIED_SECS = 15 * 60
 
 
 def use_youtube(enabled: bool) -> "YouTubeSync":
-    """YouTube stage for this run; while it's on, videos skip Drive."""
+    """YouTube stage for this run."""
     global VIDEOS_ON_YOUTUBE
     if enabled:
         try:
@@ -1533,7 +1552,7 @@ def use_youtube(enabled: bool) -> "YouTubeSync":
     VIDEOS_ON_YOUTUBE = enabled and youtube_upload.configured()
     if enabled and not VIDEOS_ON_YOUTUBE:
         log.warning("YouTube isn't signed in (`python run.py youtube-login`) — "
-                    "videos go to Drive instead")
+                    "video uploads skipped (videos are not uploaded to Drive)")
     return YouTubeSync(VIDEOS_ON_YOUTUBE)
 
 
@@ -2458,11 +2477,11 @@ def add_common(p: argparse.ArgumentParser) -> None:
                    help="during `generate`, download each artifact as soon as it is done "
                         "(default on; --no-download-now to disable)")
     p.add_argument("--drive", action=argparse.BooleanOptionalAction, default=True,
-                   help="mirror every saved file to Google Drive as it is saved "
+                   help="mirror non-media files (PDFs, images) to Google Drive as they are saved "
                         "(default on; skipped with a warning until `drive-login` is done)")
     p.add_argument("--youtube", action=argparse.BooleanOptionalAction, default=True,
-                   help="upload each video to YouTube instead of Drive as it is saved "
-                        "(default on; videos go to Drive until `youtube-login` is done)")
+                   help="upload each video to YouTube as it is saved "
+                        "(default on; skipped with a warning until `youtube-login` is done)")
     p.add_argument("--mongo", action=argparse.BooleanOptionalAction, default=True,
                    help="save each chapter to the phoenix MongoDB when its content changes "
                         "(default on; needs MONGODB_URI in .env)")
