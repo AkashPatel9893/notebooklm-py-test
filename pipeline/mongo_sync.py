@@ -40,7 +40,7 @@ from typing import Any
 
 PIPELINE = "notebooklm-pipeline"
 # Bump when the document shapes written here change, so every chapter re-syncs.
-SCHEMA_VERSION = "10"  # 10: + book_name in NCERTChapter and NCERTBook
+SCHEMA_VERSION = "12"  # 12: remove redundant thumbnails from NCERTResource items
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
 CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
@@ -56,17 +56,14 @@ C = {
     "resource": "ncertresources",
 }
 
-# Local file → (key, type, title) of an item in the chapter's NCERTResource.
+# Local file → (key, type) of an item in the chapter's NCERTResource.
 # Files not listed (slides.pptx, *.json, *.html, *.md) are not written.
 FILE_RESOURCES = {
-    "audio.m4a": ("audio", "audio", "Audio Overview"),
-    "cinematic_video.mp4": ("cinematic_video", "video", "Cinematic Video"),
-    "slides.pdf": ("slides", "pdf", "Slides"),
-    "source.pdf": ("source_pdf", "pdf", "NCERT Chapter PDF"),
-    "infographic.png": ("infographic", "image", "Infographic"),
-    "chapter_thumbnail.png": ("chapter_thumbnail", "image", "Chapter Thumbnail"),
-    "video_thumbnail.jpg": ("video_thumbnail", "image", "Video Thumbnail"),
-    "thumbnail.jpg": ("thumbnail", "image", "Thumbnail"),
+    "audio.m4a": ("audio", "audio"),
+    "cinematic_video.mp4": ("cinematic_video", "video"),
+    "slides.pdf": ("slides", "pdf"),
+    "source.pdf": ("source_pdf", "pdf"),
+    "infographic.png": ("infographic", "image"),
 }
 
 # Files that reach YouTube as a different local file (audio_video.py).
@@ -235,7 +232,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     items = []
     vthumb_info = drive.get("video_thumbnail.jpg")
     vthumb_url = (vthumb_info.get("preview_url") or vthumb_info.get("view_url") if vthumb_info else "")
-    for fname, (key, rtype, label) in FILE_RESOURCES.items():
+    for fname, (key, rtype) in FILE_RESOURCES.items():
         # Audio and video files are hosted on YouTube, never on Drive
         info = None if rtype in ("audio", "video") else drive.get(fname)
         yt = youtube.get(YOUTUBE_ALIASES.get(fname, fname))
@@ -243,7 +240,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
             continue
         # `url` is what the app embeds: YouTube embed player for audio/video, Drive preview otherwise
         url = yt.get("embed_url") if yt else (info.get("preview_url") if info else None)
-        item = {"key": key, "type": rtype, "title": label, "url": url}
+        item = {"key": key, "type": rtype, "url": url}
         if info:
             item["drive_id"] = info.get("id")
         if yt:
@@ -291,18 +288,17 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
 
     chapter_id = _upsert_insert_only(db[C["chapter"]],
                                      {"book_id": book_id, "chapter_number": chapter_no},
-                                     {"title": title, "book_name": book_name, "display_order": chapter_no})
+                                     {"title": title, "display_order": chapter_no})
     if chapter_thumb_url:
         db[C["chapter"]].update_one(
             {"_id": chapter_id},
-            {"$set": {"thumbnail_url": chapter_thumb_url, "book_name": book_name, "updated_at": now},
-             "$unset": {"image": ""}}
+            {"$set": {"thumbnail_url": chapter_thumb_url, "updated_at": now},
+             "$unset": {"image": "", "book_name": ""}}
         )
     else:
         db[C["chapter"]].update_one(
             {"_id": chapter_id},
-            {"$set": {"book_name": book_name, "updated_at": now},
-             "$unset": {"image": "", "thumbnail_url": ""}}
+            {"$unset": {"image": "", "thumbnail_url": "", "book_name": ""}}
         )
 
     if quiz:

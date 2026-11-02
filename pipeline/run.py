@@ -2519,19 +2519,16 @@ def cmd_sync(_: argparse.Namespace) -> None:
                                 or "").strip()
                     book_doc = db[mongo_sync.C["book"]].find_one({"name": book_name})
                     if book_doc:
-                        ch_update: dict[str, Any] = {"book_name": book_name, "updated_at": now_dt}
                         if ch_thumb:
-                            ch_update["thumbnail_url"] = ch_thumb
                             db[mongo_sync.C["chapter"]].update_many(
                                 {"book_id": book_doc["_id"], "chapter_number": chapter_no},
-                                {"$set": ch_update,
-                                 "$unset": {"image": ""}}
+                                {"$set": {"thumbnail_url": ch_thumb, "updated_at": now_dt},
+                                 "$unset": {"image": "", "book_name": ""}}
                             )
                         else:
                             db[mongo_sync.C["chapter"]].update_many(
                                 {"book_id": book_doc["_id"], "chapter_number": chapter_no},
-                                {"$set": ch_update,
-                                 "$unset": {"image": "", "thumbnail_url": ""}}
+                                {"$unset": {"image": "", "thumbnail_url": "", "book_name": ""}}
                             )
         if updated_books:
             print(f"Updated {updated_books} book thumbnail(s) in MongoDB")
