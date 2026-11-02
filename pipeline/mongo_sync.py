@@ -40,7 +40,7 @@ from typing import Any
 
 PIPELINE = "notebooklm-pipeline"
 # Bump when the document shapes written here change, so every chapter re-syncs.
-SCHEMA_VERSION = "9"  # 9: + subject image & thumbnail_url
+SCHEMA_VERSION = "10"  # 10: + book_name in NCERTChapter and NCERTBook
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
 CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
@@ -228,7 +228,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
     chapter_no = _num(row["chapter"])
     if class_no is None or chapter_no is None:
         raise ValueError(f"can't read class/chapter number from {row['class']!r} / {row['chapter']!r}")
-    book_name = (row.get("book") or row["subject"]).strip()
+    book_name = (row.get("book") or row.get("book_name") or row["subject"]).strip()
 
     # Only what can't be derived: Drive view/download links and YouTube watch/
     # embed links all follow from the ids.
@@ -254,7 +254,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
             item["thumbnail_url"] = vthumb_url
         items.append(item)
 
-    summary = {"title": title, "quiz": len(quiz), "flashcards": len(cards),
+    summary = {"title": title, "book_name": book_name, "quiz": len(quiz), "flashcards": len(cards),
                "mind_map_nodes": n_nodes, "resources": [i["key"] for i in items]}
     if dry_run:
         return summary
@@ -266,15 +266,20 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
                                      {"class_id": class_id, "name": row["subject"].strip()},
                                      {"display_order": 0})
     book_id = _upsert_insert_only(db[C["book"]], {"subject_id": subject_id, "name": book_name},
-                                  {"part_number": _part_number(book_name),
+                                  {"book_name": book_name,
+                                   "part_number": _part_number(book_name),
                                    "display_order": _part_number(book_name) or 0})
+    db[C["book"]].update_one(
+        {"_id": book_id},
+        {"$set": {"book_name": book_name, "updated_at": now}}
+    )
     book_thumb_url = (drive.get("thumbnail.jpg", {}).get("preview_url")
                       or drive.get("thumbnail.jpg", {}).get("view_url")
                       or row.get("thumbnail_url") or "").strip()
     if book_thumb_url:
         db[C["book"]].update_one(
             {"_id": book_id},
-            {"$set": {"thumbnail_url": book_thumb_url, "updated_at": now},
+            {"$set": {"thumbnail_url": book_thumb_url, "book_name": book_name, "updated_at": now},
              "$unset": {"image": ""}}
         )
 
@@ -286,17 +291,18 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
 
     chapter_id = _upsert_insert_only(db[C["chapter"]],
                                      {"book_id": book_id, "chapter_number": chapter_no},
-                                     {"title": title, "display_order": chapter_no})
+                                     {"title": title, "book_name": book_name, "display_order": chapter_no})
     if chapter_thumb_url:
         db[C["chapter"]].update_one(
             {"_id": chapter_id},
-            {"$set": {"thumbnail_url": chapter_thumb_url, "updated_at": now},
+            {"$set": {"thumbnail_url": chapter_thumb_url, "book_name": book_name, "updated_at": now},
              "$unset": {"image": ""}}
         )
     else:
         db[C["chapter"]].update_one(
             {"_id": chapter_id},
-            {"$unset": {"image": "", "thumbnail_url": ""}}
+            {"$set": {"book_name": book_name, "updated_at": now},
+             "$unset": {"image": "", "thumbnail_url": ""}}
         )
 
     if quiz:
@@ -335,7 +341,8 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         db[C["resource"]].delete_one({"chapter_id": chapter_id})
 
     summary["chapter_id"] = str(chapter_id)
-    marker = {"hash": content_hash(cdir), "chapter_id": str(chapter_id),
+    summary["book_id"] = str(book_id)
+    marker = {"hash": content_hash(cdir), "chapter_id": str(chapter_id), "book_id": str(book_id),
               "synced_at": now.isoformat(timespec="seconds"), **summary}
     tmp = cdir / f".{MARKER}.tmp"
     tmp.write_text(json.dumps(marker, indent=2), encoding="utf-8")

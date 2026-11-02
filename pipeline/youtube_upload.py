@@ -311,6 +311,7 @@ class YouTube:
             "id": video_id,
             "name": path.name,
             "title": body["snippet"]["title"],
+            "description": body["snippet"]["description"],
             # What we asked for (YOUTUBE_PRIVACY) vs what YouTube applied — the
             # latter stays "private" until the API project is audited.
             "requested_privacy": PRIVACY,
@@ -426,6 +427,25 @@ class YouTube:
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": made_for_kids},
         }), COST_WRITE, "privacy changes")
         return res.get("status", {}).get("privacyStatus", privacy)
+
+    def update_metadata(
+        self,
+        video_id: str,
+        title: str,
+        description: str,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Update a video's snippet (title, description, tags; ~50 units)."""
+        body = {
+            "id": video_id,
+            "snippet": {
+                "title": _clean_title(title),
+                "description": description[:5000],
+                "categoryId": CATEGORY_EDUCATION,
+                "tags": tags or [],
+            },
+        }
+        return self._call(self.svc.videos().update(part="snippet", body=body), COST_WRITE, "metadata updates")
 
     def long_uploads(self) -> str:
         """Channel's longUploadsStatus: 'allowed' lets it upload over 15 minutes;

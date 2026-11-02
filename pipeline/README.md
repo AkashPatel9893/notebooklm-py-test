@@ -398,7 +398,7 @@ database using the exact shapes of `phoenix/app/models/ncert/*`:
 
 | Collection | What |
 |------------|------|
-| `ncertclasses` → `ncertsubjects` → `ncertbooks` → `ncertchapters` | the hierarchy; chapter title is `chapter_title` from `progress.csv` (falls back to the mind map's root node) |
+| `ncertclasses` → `ncertsubjects` → `ncertbooks` → `ncertchapters` | the hierarchy; chapter title is `chapter_title` from `progress.csv` (falls back to the mind map's root node); book name is saved as `book_name` on both `ncertbooks` and `ncertchapters` |
 | `ncertquizquestions` | multiple-choice questions only (`answer_options`, exactly one correct, + `hint`); other question types NotebookLM produces are skipped |
 | `ncertflashcards` | every card (`card_type` 1 — NotebookLM doesn't send a type) |
 | `ncertmindmaps` | the tree, converted to `{title, root: {id, text, level, expanded, children}}` |

@@ -220,8 +220,7 @@ def _ch_no(text: str) -> int:
 
 def youtube_sort_key(row: dict[str, str], kind: str) -> tuple[str, int, int]:
     """Playlist order: book, then chapter number, then Video → Cinematic → Audio."""
-    book = (row.get("book") or "").strip()
-    book = "" if book == row["subject"].strip() else book
+    book = (row.get("book") or row.get("book_name") or "").strip()
     kinds = list(YOUTUBE_LABELS)
     return (book.casefold(), _ch_no(row["chapter"]),
             kinds.index(kind) if kind in kinds else len(kinds))
@@ -250,29 +249,66 @@ def _hashtag(text: str) -> str:
 def youtube_meta(row: dict[str, str], kind: str) -> tuple[str, str, list[str]]:
     """Title, description and tags for one chapter video.
 
-    Title is the chapter title plus where it sits and what it is ("… | Class 11
-    · Chemistry · Chapter 1 (Audio)"), shortened to fit YouTube's 100
-    characters. The description adds the book and hashtags (no links).
+    Title is the chapter title plus where it sits, the book name, and what it is ("… | Class 11
+    · Chemistry Part-I · Chapter 1 (Audio)"), shortened to fit YouTube's 100
+    characters. The description includes the book name, class, subject, chapter, and hashtags.
     """
     cls, subj, ch = row["class"].strip(), row["subject"].strip(), row["chapter"].strip()
-    book = (row.get("book") or "").strip()
+    book = (row.get("book") or row.get("book_name") or "").strip()
     name = (row.get("chapter_title") or "").strip()
     label = f" ({YOUTUBE_LABELS.get(kind, kind)})"
     place = f"{cls} · {subj} · {ch}"
     ch_no = re.sub(r"\D", "", ch) or ch
     short = f"{cls} {subj} Ch {ch_no}"
-    title = next((t for t in (f"{name} | {place}{label}", f"{name} | {short}{label}",
-                              f"{name}{label}") if len(t) <= 100),
-                 name) if name else place + label
-    lines = [f"{name} — {kind}" if name else kind, "",
+
+    # Build title candidates prioritizing book name, fitting within YouTube's 100 chars
+    cands: list[str] = []
+    if name:
+        if book:
+            if book != subj:
+                cands.append(f"{name} | {cls} · {subj} · {book} · {ch}{label}")
+            cands.append(f"{name} | {cls} · {book} · {ch}{label}")
+            cands.append(f"{name} | {cls} {book} Ch {ch_no}{label}")
+            cands.append(f"{name} | {book} · {ch}{label}")
+            cands.append(f"{name} | {book} Ch {ch_no}{label}")
+            cands.append(f"{name} | {book}{label}")
+        cands.append(f"{name} | {place}{label}")
+        cands.append(f"{name} | {short}{label}")
+        cands.append(f"{name}{label}")
+        cands.append(name)
+        title = next((t for t in cands if len(t) <= 100), name[:100])
+    else:
+        if book:
+            if book != subj:
+                cands.append(f"{cls} · {subj} · {book} · {ch}{label}")
+            cands.append(f"{cls} · {book} · {ch}{label}")
+            cands.append(f"{cls} {book} Ch {ch_no}{label}")
+            cands.append(f"{book} · {ch}{label}")
+        cands.append(f"{place}{label}")
+        cands.append(f"{short}{label}")
+        fallback = f"{place}{label}"
+        title = next((t for t in cands if len(t) <= 100), fallback[:100])
+
+    lines = [f"{name} — {kind}" if name else (f"{book} — {kind}" if book else kind), "",
              f"Class: {cls}", f"Subject: {subj}"]
-    if book and book != subj:
+    if book:
         lines.append(f"Book: {book}")
     lines.append(f"Chapter: {ch}" + (f" — {name}" if name else ""))
+    hashtags = ["NCERT", cls, subj]
+    if book:
+        hashtags.append(book)
+    if name:
+        hashtags.append(name)
     lines += ["", " ".join(dict.fromkeys(
-        "#" + _hashtag(t) for t in ("NCERT", cls, subj, book, name) if t))]
-    tags = [t for t in dict.fromkeys(["NCERT", cls, subj, book, ch, name, kind,
-                                      f"NCERT {cls} {subj}"]) if t]
+        "#" + _hashtag(t) for t in hashtags if t))]
+
+    tags_list = ["NCERT", cls, subj]
+    if book:
+        tags_list.append(book)
+    tags_list.extend([ch, name, kind, f"NCERT {cls} {subj}"])
+    if book:
+        tags_list.append(f"NCERT {book}")
+    tags = [t for t in dict.fromkeys(tags_list) if t]
     return title, "\n".join(lines), tags
 
 # Defaults (overridable on the CLI).
@@ -605,7 +641,7 @@ class Store:
             row = {
                 "class": (raw.get("Class") or "").strip(),
                 "subject": (raw.get("Subject") or "").strip(),
-                "book": (raw.get("Book") or "").strip(),
+                "book": (raw.get("Book") or raw.get("Book Name") or raw.get("book_name") or raw.get("book") or "").strip(),
                 "chapter": (raw.get("Chapter") or "").strip(),
                 "pdf_url": (raw.get("PDF URL") or "").strip(),
                 "book_index_url": (raw.get("Book Index URL") or "").strip(),
@@ -828,6 +864,29 @@ async def ensure_chapter_title(client: NotebookLMClient, store: Store, row: dict
     row["chapter_title"] = title
     await store.save()
     log.info("[%s] chapter title: \"%s\"", key, title)
+
+
+BOOK_PROMPT = ("What is the exact title or name of the NCERT textbook or book that this chapter belongs to? "
+               "Reply with the book name only — no quotes, no explanation.")
+
+
+async def ensure_book_name(client: NotebookLMClient, store: Store, row: dict[str, str],
+                           key: str) -> None:
+    """Ask the notebook for the textbook's real name if not in the sheet/store. Never raises."""
+    if row.get("book") or not row.get("notebook_id"):
+        return
+    try:
+        res = await client.chat.ask(row["notebook_id"], BOOK_PROMPT)
+    except Exception as e:  # noqa: BLE001 — retried on the next run
+        log.warning("[%s] book name: ask failed (%s)", key, e)
+        return
+    name = clean_title(res.answer)
+    if not name:
+        log.warning("[%s] book name: unusable answer %r", key, (res.answer or "")[:80])
+        return
+    row["book"] = name
+    await store.save()
+    log.info("[%s] book name: \"%s\"", key, name)
 
 
 def _looks_rate_limited(e: Exception) -> bool:
@@ -1105,6 +1164,7 @@ async def generate_row(
             await store.save()
             log.info("[%s] gen already complete — skip", key)
             await ensure_chapter_title(client, store, row, key)
+            await ensure_book_name(client, store, row, key)
             if download_now and row.get("notebook_id"):
                 for a in active:
                     if not download_complete(row, a):
@@ -1212,6 +1272,7 @@ async def generate_row(
             log.info("[%s] source ready (%s)", key, sid(row["source_id"]))
             sids = [row["source_id"]]
             await ensure_chapter_title(client, store, row, key)
+            await ensure_book_name(client, store, row, key)
 
             # 4. Artifacts (sequential within a chapter; chapters run in parallel).
             #    Before generating, ASK NotebookLM whether the artifact already
@@ -1674,6 +1735,7 @@ class YouTubeSync:
             md5 = await asyncio.to_thread(drive_upload.file_md5, f)
             old = manifest.get(f.name)
             kind = YOUTUBE_FILES[f.name]
+            title, desc, tags = youtube_meta(row, kind)
             sent = changed = False
             if old and old.get("md5") == md5:
                 # Same video, only touched on disk — never spend quota on it twice.
@@ -1695,6 +1757,20 @@ class YouTubeSync:
                     old.update(requested_privacy=youtube_upload.PRIVACY, privacy=applied,
                                made_for_kids=kids)
                     changed = True
+                if old.get("title") != title or old.get("description") != desc:
+                    async with self.lock:
+                        if not self.enabled:
+                            return
+                        try:
+                            await self._call(key, f"metadata {f.name}",
+                                             yt.update_metadata, old["id"], title, desc, tags)
+                            old.update(title=title, description=desc)
+                            changed = True
+                            log.info("[%s] ▶ %s updated title & description on YouTube", key, f.name)
+                        except youtube_upload.QuotaExceeded:
+                            return
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("[%s] youtube metadata update %s failed: %s", key, f.name, e)
             else:
                 secs = await asyncio.to_thread(audio_video.duration, f)
                 if secs and secs > YOUTUBE_MAX_UNVERIFIED_SECS:
@@ -1712,7 +1788,6 @@ class YouTubeSync:
                                   "https://www.youtube.com/verify, then re-run. Skipped, no quota used.",
                                   key, f.name, secs // 60, long_ok or "unknown")
                         continue
-                title, desc, tags = youtube_meta(row, kind)
                 # Earlier versions of this file — never mistaken for this one.
                 replaced = (old.get("replaced", []) + [
                     {"id": old["id"], "playlist_item_id": old.get("playlist_item_id")}]) if old else []
@@ -1756,7 +1831,7 @@ class YouTubeSync:
                             self.progress.remove_task(task)
                             if not self.progress.tasks:
                                 self.progress.stop()
-                info.update(made_for_kids=kids, replaced=replaced)
+                info.update(title=title, description=desc, made_for_kids=kids, replaced=replaced)
                 sent = changed = True
             if not info.get("playlist_id"):
                 async with self.lock:
@@ -2280,18 +2355,19 @@ async def cmd_mongo(ns: argparse.Namespace) -> None:
 
 
 async def cmd_titles(_: argparse.Namespace) -> None:
-    """Fill chapter_title for every chapter that has a notebook but no title yet."""
+    """Fill chapter_title and book for every chapter that has a notebook."""
     store = Store()
     store.load()
-    todo = [r for r in store.rows.values() if r.get("notebook_id") and not r.get("chapter_title")]
+    todo = [r for r in store.rows.values() if r.get("notebook_id") and (not r.get("chapter_title") or not r.get("book"))]
     if not todo:
-        log.info("every chapter with a notebook already has a title")
+        log.info("every chapter with a notebook already has a title and book")
         return
     sem = asyncio.Semaphore(DEFAULT_CONCURRENCY)
 
     async def one(row: dict[str, str]) -> None:
         async with sem:
             await ensure_chapter_title(client, store, row, row_key(row))
+            await ensure_book_name(client, store, row, row_key(row))
 
     async with NotebookLMClient.from_storage() as client:
         await asyncio.gather(*[one(r) for r in todo])
@@ -2423,12 +2499,15 @@ def cmd_sync(_: argparse.Namespace) -> None:
             cdir = chapter_dir(row)
             drive_manifest = load_drive_manifest(cdir)
             thumb = (row.get("thumbnail_url") or "").strip()
-            book_name = (row.get("book") or row.get("subject") or "").strip()
+            book_name = (row.get("book") or row.get("book_name") or row.get("subject") or "").strip()
             chapter_no = mongo_sync._num(row.get("chapter") or "")
-            if thumb and book_name:
+            if book_name:
+                book_update: dict[str, Any] = {"book_name": book_name, "updated_at": now_dt}
+                if thumb:
+                    book_update["thumbnail_url"] = thumb
                 res = db[mongo_sync.C["book"]].update_many(
                     {"name": book_name},
-                    {"$set": {"thumbnail_url": thumb, "updated_at": now_dt},
+                    {"$set": book_update,
                      "$unset": {"image": ""}}
                 )
                 if res.modified_count > 0:
@@ -2440,16 +2519,19 @@ def cmd_sync(_: argparse.Namespace) -> None:
                                 or "").strip()
                     book_doc = db[mongo_sync.C["book"]].find_one({"name": book_name})
                     if book_doc:
+                        ch_update: dict[str, Any] = {"book_name": book_name, "updated_at": now_dt}
                         if ch_thumb:
+                            ch_update["thumbnail_url"] = ch_thumb
                             db[mongo_sync.C["chapter"]].update_many(
                                 {"book_id": book_doc["_id"], "chapter_number": chapter_no},
-                                {"$set": {"thumbnail_url": ch_thumb, "updated_at": now_dt},
+                                {"$set": ch_update,
                                  "$unset": {"image": ""}}
                             )
                         else:
                             db[mongo_sync.C["chapter"]].update_many(
                                 {"book_id": book_doc["_id"], "chapter_number": chapter_no},
-                                {"$unset": {"image": "", "thumbnail_url": ""}}
+                                {"$set": ch_update,
+                                 "$unset": {"image": "", "thumbnail_url": ""}}
                             )
         if updated_books:
             print(f"Updated {updated_books} book thumbnail(s) in MongoDB")
