@@ -8,21 +8,24 @@ Step-by-step commands to run the NCERT → NotebookLM pipeline. Run them in the
 ## 0. One-time setup (already done — only if starting fresh)
 
 ```bash
-cd /Users/akash/Desktop/notebooklm-py
+cd /Users/akash/Desktop/Lernoverse/notebooklm-py-test
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
-notebooklm login          # opens browser, sign in to Google once
+pip install -e .                          # install notebooklm-py
+pip install "notebooklm-py[browser]"      # browser login support
+pip install -r pipeline/requirements.txt  # pipeline dependencies (.env, drive, mongodb, etc.)
+python -m playwright install chromium     # only if browser login needed
+notebooklm login                          # opens browser, sign in to Google once
 ```
 
 ---
 
 ## 1. Activate the environment (do this EVERY new terminal)
 
-> Without this you'll get `zsh: command not found: python`.
+> Without this you'll get `zsh: command not found: python` or `ModuleNotFoundError: No module named 'dotenv'`.
 
 ```bash
-cd /Users/akash/Desktop/notebooklm-py
+cd /Users/akash/Desktop/Lernoverse/notebooklm-py-test
 source .venv/bin/activate
 cd pipeline
 ```
@@ -35,7 +38,7 @@ which python
 
 If you'd rather skip activation, use the full path instead of `python` in every
 command below:
-`/Users/akash/Desktop/notebooklm-py/.venv/bin/python run.py ...`
+`/Users/akash/Desktop/Lernoverse/notebooklm-py-test/.venv/bin/python run.py ...`
 
 ---
 
@@ -245,6 +248,8 @@ Valid artifact names for `--artifacts`:
 | Problem | Fix |
 |---------|-----|
 | `zsh: command not found: python` | You skipped step 1 — `source .venv/bin/activate` (or use the full `.venv/bin/python` path). |
+| `ModuleNotFoundError: No module named 'dotenv'` (or any missing library) | Activate `.venv` and install: `pip install -r pipeline/requirements.txt`. |
+| Missing `.env` / credentials | Verify `pipeline/.env` exists and run `python run.py check` to test all connections. |
 | Auth error / cookie expired | `notebooklm login`, then re-run. |
 | Generation failed (rate limit) | Normal for audio/quiz/flashcards. Re-run `python run.py generate --only-failed`. |
 | PDF download fails | The script auto-retries `www.ncert.nic.in`; if it still fails the host may be down — re-run later. |

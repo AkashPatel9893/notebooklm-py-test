@@ -51,26 +51,36 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-import httpx
-from dotenv import load_dotenv
+try:
+    import httpx
+    from dotenv import load_dotenv
+    from rich import box
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import (
+        BarColumn,
+        DownloadColumn,
+        Progress,
+        TaskID,
+        TextColumn,
+        TimeRemainingColumn,
+        TransferSpeedColumn,
+    )
+    from rich.table import Table
+    from rich.text import Text
+except ModuleNotFoundError as _err:
+    import sys
+    sys.exit(
+        f"\n❌ Missing dependency: {_err.name}\n"
+        f"Make sure you activate your virtual environment and install the pipeline requirements:\n"
+        f"    source ../.venv/bin/activate\n"
+        f"    pip install -r requirements.txt\n"
+    )
+
 import audio_video
 import drive_upload
 import mongo_sync
 import youtube_upload
-from rich import box
-from rich.console import Console
-from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-from rich.table import Table
-from rich.text import Text
 
 from notebooklm import (
     ArtifactType,
@@ -82,6 +92,7 @@ from notebooklm import (
     NotebookLMClient,
     QuizDifficulty,
     QuizQuantity,
+    QuizQuestionType,
     RateLimitError,
     RPCError,
     SlideDeckFormat,
@@ -332,15 +343,26 @@ async def _gen_study_guide(c: NotebookLMClient, nb: str, sids: list[str]) -> str
 
 async def _gen_quiz(c: NotebookLMClient, nb: str, sids: list[str]) -> str:
     s = await c.artifacts.generate_quiz(
-        nb, sids, instructions=QUIZ_INSTRUCTIONS, quantity=QUIZ_QUANTITY,
+        nb,
+        sids,
+        instructions=QUIZ_INSTRUCTIONS,
+        quantity=QUIZ_QUANTITY,
         difficulty=QUIZ_DIFFICULTY,
+        language=LANGUAGE,
+        question_types=[QuizQuestionType.MULTIPLE_CHOICE],
+        include_images=False,
     )
     return s.task_id
 
 
 async def _gen_flashcards(c: NotebookLMClient, nb: str, sids: list[str]) -> str:
     s = await c.artifacts.generate_flashcards(
-        nb, sids, quantity=FLASHCARDS_QUANTITY, difficulty=FLASHCARDS_DIFFICULTY
+        nb,
+        sids,
+        quantity=FLASHCARDS_QUANTITY,
+        difficulty=FLASHCARDS_DIFFICULTY,
+        language=LANGUAGE,
+        include_images=False,
     )
     return s.task_id
 
@@ -711,7 +733,9 @@ async def download_file(url: str, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".part")
     headers = {"User-Agent": _UA}
     last_err: Exception | None = None
-    async with httpx.AsyncClient(follow_redirects=True, timeout=20.0, headers=headers) as hc:
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=20.0, headers=headers, verify=False
+    ) as hc:
         for cand in _url_candidates(url):
             try:
                 async with hc.stream("GET", cand) as resp:
