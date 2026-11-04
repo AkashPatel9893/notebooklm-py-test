@@ -18,7 +18,13 @@ from .._types.enums import (
     ArtifactTypeCode,
     VideoFormat,
 )
-from ..exceptions import NetworkError, RateLimitError, RPCError, ServerError
+from ..exceptions import (
+    NetworkError,
+    RateLimitError,
+    RPCError,
+    ServerError,
+    UnsupportedOperationError,
+)
 from .artifact_proto import ARTIFACT_WIRE_PROTO as _WIRE_PROTO
 from .artifact_proto import ARTIFACTS_PROTO as _PROTO
 from .artifact_proto import READ_PROTO as _READ_PROTO
@@ -154,9 +160,17 @@ def build_normalized_create_artifact_plan(
             if isinstance(normalized, n.NormalizedFlashcards)
             else _PROTO.APP_TYPE_QUIZ
         )
+        if isinstance(normalized, n.NormalizedQuiz) and normalized.avoid_question_type_codes:
+            # Live-verified: the Android server ignores the proto's avoid-list and
+            # always returns multiple-choice quizzes, so fail loud instead of
+            # silently dropping the caller's selection.
+            raise UnsupportedOperationError(
+                "question_types is not supported on the Android backend"
+            )
         generation_options = _PROTO.AppArtifactGenerationOptions(
             app_type=app_type,
             free_text_steering_prompt=normalized.instructions or "",
+            language_code=normalized.language or "",
         )
         if isinstance(normalized, n.NormalizedFlashcards):
             generation_options.flashcards_generation_options.CopyFrom(
@@ -165,6 +179,8 @@ def build_normalized_create_artifact_plan(
                     flashcards_difficulty=normalized.difficulty_code,
                 )
             )
+            if normalized.disabled_source_images is not None:
+                generation_options.flashcards_generation_options.image_option.disabled_source_images = normalized.disabled_source_images
         else:
             generation_options.quiz_generation_options.CopyFrom(
                 _PROTO.QuizGenerationOptions(
@@ -172,6 +188,10 @@ def build_normalized_create_artifact_plan(
                     quiz_difficulty=normalized.difficulty_code,
                 )
             )
+            if normalized.disabled_source_images is not None:
+                generation_options.quiz_generation_options.image_option.disabled_source_images = (
+                    normalized.disabled_source_images
+                )
         artifact = _PROTO.Artifact(
             type=_PROTO.ARTIFACT_TYPE_APP,
             sources=artifact_sources,

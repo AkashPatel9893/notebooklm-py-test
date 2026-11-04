@@ -4,6 +4,16 @@
     "ArtifactCreationCapability",
     "__version__",
     "NotebookLMClient",
+    "LiveSession",
+    "LiveAudio",
+    "LiveBufferOverflowError",
+    "LiveEstablished",
+    "LiveEvent",
+    "LiveGoAway",
+    "LiveInterrupted",
+    "LiveSessionClosedError",
+    "LiveTranscript",
+    "LiveTurnComplete",
     "AuthTokens",
     "correlation_id",
     "get_request_id",
@@ -142,6 +152,7 @@
     "VideoStyle",
     "QuizQuantity",
     "QuizDifficulty",
+    "QuizQuestionType",
     "InfographicOrientation",
     "InfographicDetail",
     "InfographicStyle",
@@ -199,6 +210,8 @@
     "resolve_download_format"
   ],
   "notebooklm.exceptions": [
+    "LiveSessionClosedError",
+    "LiveBufferOverflowError",
     "NotebookLMError",
     "NotFoundError",
     "WaitTimeoutError",
@@ -261,6 +274,17 @@
     "atomic_update_json",
     "atomic_write_json",
     "replace_file_atomically"
+  ],
+  "notebooklm.live": [
+    "LiveEvent",
+    "LiveAudio",
+    "LiveEstablished",
+    "LiveTranscript",
+    "LiveInterrupted",
+    "LiveTurnComplete",
+    "LiveGoAway",
+    "LiveSessionClosedError",
+    "LiveBufferOverflowError"
   ],
   "notebooklm.log": [
     "install_redaction"

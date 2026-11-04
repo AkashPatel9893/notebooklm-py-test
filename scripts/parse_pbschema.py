@@ -109,11 +109,15 @@ def parse_ii_body(lines):
     msg_name = None
     # sliding recent context
     recent_name = None
+    named_tag = None
+    generic_bytes = False
     recent_tag = None
     recent_type = None
     recent_builder_name = None
     seen_first_builderinfo = False
     for ln in lines:
+        if "TypeArguments: <List<int>>" in ln:
+            generic_bytes = True
         m = TYPE_RE.search(ln)
         if m and "TypeArguments" in ln:
             recent_type = m.group(1)
@@ -125,6 +129,7 @@ def parse_ii_body(lines):
         mn = NAME_RE.search(ln)
         if mn and ("PP," in ln or '"' in ln):
             recent_name = mn.group(1)
+            named_tag = recent_tag
         if not seen_first_builderinfo and (mb := BUILDER_NAME_RE.search(ln)) is not None:
             # the last quoted string before BuilderInfo() is the (possibly dotted) name
             recent_builder_name = mb.group(1)
@@ -137,6 +142,8 @@ def parse_ii_body(lines):
             recent_name = None
             recent_tag = None
             recent_type = None
+            named_tag = None
+            generic_bytes = False
             continue
         ma = ADDER_RE.search(ln)
         if ma:
@@ -145,7 +152,21 @@ def parse_ii_body(lines):
                 # oneof/reserved: note oneof separately
                 recent_name = None
                 recent_type = None
+                named_tag = None
+                generic_bytes = False
                 continue
+            # Generic a<List<int>>(tag, name, PbFieldType.OY=32). The
+            # type-code immediate follows the name and must not become its tag.
+            if adder == "a" and generic_bytes and recent_tag == 32 and recent_name and named_tag:
+                fields.append(
+                    {
+                        "tag": named_tag,
+                        "name": recent_name,
+                        "type": "bytes",
+                        "repeated": False,
+                        "adder": "a",
+                    }
+                )
             if adder in ADDERS and recent_name and recent_tag:
                 kind, repeated = ADDERS[adder]
                 typ = recent_type if kind in ("message", "enum") and recent_type else kind
@@ -160,6 +181,8 @@ def parse_ii_body(lines):
                 )
             recent_name = None
             recent_type = None
+            named_tag = None
+            generic_bytes = False
     return msg_name, fields
 
 

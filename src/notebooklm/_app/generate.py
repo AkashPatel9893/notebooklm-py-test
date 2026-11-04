@@ -124,8 +124,6 @@ def _build_call_kwargs(request: GenerationRequest, *, sources: list[str] | None)
         _set_optional(base, "instructions", request.instructions)
         base["audio_format"] = request.audio_format
         base["audio_length"] = request.audio_length
-        if request.later:
-            base["later"] = True
     elif isinstance(request, VideoGenerationRequest):
         _set_optional(base, "language", request.language)
         _set_optional(base, "instructions", request.instructions)
@@ -141,9 +139,14 @@ def _build_call_kwargs(request: GenerationRequest, *, sources: list[str] | None)
         base["slide_format"] = request.slide_format
         base["slide_length"] = request.slide_length
     elif isinstance(request, (QuizGenerationRequest, FlashcardsGenerationRequest)):
+        _set_optional(base, "language", request.language)
         _set_optional(base, "instructions", request.instructions)
         base["quantity"] = request.quantity
         base["difficulty"] = request.difficulty
+        if isinstance(request, QuizGenerationRequest) and request.question_types is not None:
+            base["question_types"] = list(request.question_types)
+        if request.include_images is not None:
+            base["include_images"] = request.include_images
     elif isinstance(request, InfographicGenerationRequest):
         _set_optional(base, "language", request.language)
         _set_optional(base, "instructions", request.instructions)
@@ -163,6 +166,22 @@ def _build_call_kwargs(request: GenerationRequest, *, sources: list[str] | None)
         base["report_format"] = request.report_format
     else:  # pragma: no cover - closed union exhaustiveness
         raise AssertionError(f"unhandled generation request: {request!r}")
+    if (
+        isinstance(
+            request,
+            (
+                AudioGenerationRequest,
+                VideoGenerationRequest,
+                SlideDeckGenerationRequest,
+                QuizGenerationRequest,
+                FlashcardsGenerationRequest,
+                InfographicGenerationRequest,
+                ReportGenerationRequest,
+            ),
+        )
+        and request.later
+    ):
+        base["later"] = True
     return base
 
 

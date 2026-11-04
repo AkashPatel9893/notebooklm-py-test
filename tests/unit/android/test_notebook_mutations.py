@@ -20,6 +20,7 @@ from notebooklm._android.notebooks import (
     DELETE_PROJECTS_METHOD,
     GENERATE_NOTEBOOK_GUIDE_METHOD,
     GENERATE_PROMPT_SUGGESTIONS_METHOD,
+    GET_PROJECT_METHOD,
     LIST_RECENT_PROJECTS_METHOD,
     MUTATE_PROJECT_METHOD,
     REMOVE_RECENTLY_VIEWED_PROJECT_METHOD,
@@ -37,6 +38,7 @@ from notebooklm._android.session import AndroidSession
 from notebooklm._idempotency import bound_operation_journal_entries
 from notebooklm._notebooks import NotebooksAPI
 from notebooklm.exceptions import (
+    ClientError,
     DecodingError,
     RPCError,
     ServerError,
@@ -665,7 +667,7 @@ async def test_remove_from_recent_calls_the_native_route() -> None:
 
 @pytest.mark.asyncio
 async def test_remove_from_recent_treats_internal_as_the_web_no_op() -> None:
-    """INTERNAL means the project is owned, i.e. never in the shared-recents list.
+    """An explicit owner read confirms the project is not in shared recents.
 
     Web returns success and leaves such a project in place, so the postcondition
     already holds; raising here would be a backend-visible parity break.
@@ -675,11 +677,19 @@ async def test_remove_from_recent_treats_internal_as_the_web_no_op() -> None:
         method_id=REMOVE_RECENTLY_VIEWED_PROJECT_METHOD,
         rpc_code=13,
     )
-    transport = SequenceTransport({REMOVE_RECENTLY_VIEWED_PROJECT_METHOD: [error]})
+    response = notebooks_pb2.WireGetProjectResponse()
+    response.project.id = "notebook-1"
+    response.project.metadata.user_role = read_pb2.PROJECT_ROLE_OWNER
+    transport = SequenceTransport(
+        {
+            REMOVE_RECENTLY_VIEWED_PROJECT_METHOD: [error],
+            GET_PROJECT_METHOD: [response],
+        }
+    )
 
     assert await _api(transport).remove_from_recent("notebook-1") is None
 
-    assert len(transport.calls) == 1
+    assert len(transport.calls) == 2
     assert transport.calls[0][2]["replay_safe"] is False
 
 
@@ -696,3 +706,84 @@ async def test_remove_from_recent_propagates_every_other_status() -> None:
         await _api(transport).remove_from_recent("notebook-1")
 
     assert raised.value is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [1, 2, 3, 0, 99])
+@pytest.mark.parametrize("rpc_code", [3, 13])
+async def test_remove_from_recent_refusal_requires_explicit_ownership(
+    role: int, rpc_code: int
+) -> None:
+    error = RPCError(
+        "remove-recent rejected",
+        method_id=REMOVE_RECENTLY_VIEWED_PROJECT_METHOD,
+        rpc_code=rpc_code,
+    )
+    response = notebooks_pb2.WireGetProjectResponse()
+    response.project.id = "notebook-1"
+    response.project.metadata.user_role = role
+    transport = SequenceTransport(
+        {
+            REMOVE_RECENTLY_VIEWED_PROJECT_METHOD: [error],
+            GET_PROJECT_METHOD: [response],
+        }
+    )
+
+    if role == read_pb2.PROJECT_ROLE_OWNER:
+        assert await _api(transport).remove_from_recent("notebook-1") is None
+    else:
+        with pytest.raises(RPCError) as raised:
+            await _api(transport).remove_from_recent("notebook-1")
+        assert raised.value is error
+
+    assert [call[0] for call in transport.calls] == [
+        REMOVE_RECENTLY_VIEWED_PROJECT_METHOD,
+        GET_PROJECT_METHOD,
+    ]
+    assert transport.calls[1][1].project_id == "notebook-1"
+    assert transport.calls[1][2]["replay_safe"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rpc_code", [3, 13])
+@pytest.mark.parametrize(
+    "read_result",
+    [
+        RPCError("not found", rpc_code=5),
+        ServerError("read unavailable", rpc_code=14),
+        notebooks_pb2.WireGetProjectResponse(),
+    ],
+)
+async def test_remove_from_recent_preserves_refusal_when_ownership_unavailable(
+    read_result: Any,
+    rpc_code: int,
+) -> None:
+    error = RPCError(
+        "remove-recent rejected",
+        method_id=REMOVE_RECENTLY_VIEWED_PROJECT_METHOD,
+        rpc_code=rpc_code,
+    )
+    transport = SequenceTransport(
+        {
+            REMOVE_RECENTLY_VIEWED_PROJECT_METHOD: [error],
+            GET_PROJECT_METHOD: [read_result],
+        }
+    )
+
+    with pytest.raises(RPCError) as raised:
+        await _api(transport).remove_from_recent("notebook-1")
+
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_remove_from_recent_ownership_read_cancellation_propagates() -> None:
+    transport = SequenceTransport(
+        {
+            REMOVE_RECENTLY_VIEWED_PROJECT_METHOD: [ClientError("rejected", rpc_code=3)],
+            GET_PROJECT_METHOD: [asyncio.CancelledError()],
+        }
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await _api(transport).remove_from_recent("notebook-1")

@@ -13,6 +13,13 @@ credential-scoped transfers are covered by diagrams
 [28](https://teng-lin.github.io/notebooklm-py/diagrams/28-profile-auth-backend-selection.workflow.html) and
 [30](https://teng-lin.github.io/notebooklm-py/diagrams/30-transfer-security-boundaries.dataflow.html).
 
+Live Voice and Interactive Audio Overview protocol spikes are recorded in the
+[Live session evidence](live-session-static-evidence.md), including successful
+Android gRPC signaling and WebRTC speech input on a disposable notebook.
+
+Notebook-bound Live Voice is available through `client.live.connect(...)`; see
+[Live Voice usage](../live-voice.md) for media ownership, event and cleanup contracts.
+
 ## Using the Android backend
 
 Install the Android runtime (and the browser extra for the one-time interactive
@@ -92,7 +99,7 @@ consolidated document rather than encoded in filenames.
 |---|---|
 | [`endpoints.md`](endpoints.md) | gRPC method surface and mobile ⇄ Web cross-reference |
 | [`proto-evidence-ledger.md`](proto-evidence-ledger.md) | exact/local compile closure, replay policy, hashes, and admission decisions |
-| [`schema.proto`](schema.proto) | generated 326-message / 879-field Dart-AOT recovery parsed by CI |
+| [`schema.proto`](schema.proto) | generated 326-message / 881-field Dart-AOT recovery parsed by CI |
 | [`enums.txt`](enums.txt) | generated 104-block (94 enum names) integer inventory parsed by CI |
 | [`grpc-service-signature-inferences.json`](grpc-service-signature-inferences.json) | seventeen Web-derived signatures plus the live-validated quota cross-service alias |
 | [`grpc-service-signature-exceptions.json`](grpc-service-signature-exceptions.json) | schema-v2 path-only exceptions with importable codecs and replay policy |
@@ -116,6 +123,7 @@ consolidated document rather than encoded in filenames.
 | [`blutter-grpc-signature-evidence.md`](blutter-grpc-signature-evidence.md) | exact generated-client bindings for formerly unresolved response FQNs |
 | [`chat-session-control-evidence.md`](chat-session-control-evidence.md) | live Web/Android session-status and cancellation semantics for #2303 |
 | [`usage-quota-evidence.md`](usage-quota-evidence.md) | live compute-meter accounting plus Android quota-message and route recovery for #2283 / ADR-0037 |
+| [`live-session-static-evidence.md`](live-session-static-evidence.md) | #2509: live-verified bidirectional audio, first-party host, token acceptance, and separate WebRTC interactivity |
 
 ### Capture and tooling
 
@@ -137,7 +145,7 @@ uv run python scripts/parse_pbenums.py /path/to/blutter/out/<build> \
 ```
 
 The default package-directory selectors preserve the complete historical evidence scope (67 files
-in the current dump). The schema generator reports `326 messages, 879 fields` and resolves package
+in the current dump). The schema generator reports `326 messages, 881 fields` and resolves package
 identity through the sibling `objs.txt`; an unresolved package remains explicit rather than being
 inferred from its directory. In particular `FunctionCall`, `FunctionResponse`, `TailwindStruct`,
 and `TailwindValue` sit in Dart libraries under an `orchestration.v1.agency` directory but are
@@ -247,7 +255,7 @@ deletion returns `None`. The Web soft-delete tombstone is a storage leak rather 
 
 **`fieldType` in `schema.proto` is a parse failure, not a field name.** The
 extractor emits that placeholder where it could not recover a real name — 11 of
-879 fields. Do not treat it as real.
+881 fields. Do not treat it as real.
 
 **Several messages appear twice with *different* tags.** One copy is the wire
 schema (`…orchestration.v1`, `…tailwind.v1`), the other is the app's local

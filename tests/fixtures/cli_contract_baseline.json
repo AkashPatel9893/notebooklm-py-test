@@ -4708,6 +4708,24 @@
       "class": "Command",
       "params": [
         {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
           "kind": "argument",
           "name": "description",
           "nargs": 1,
@@ -5156,6 +5174,24 @@
       "class": "Command",
       "params": [
         {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
           "kind": "argument",
           "name": "description",
           "nargs": 1,
@@ -5247,6 +5283,44 @@
               "hard"
             ],
             "name": "choice"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Output language code (default: not sent)",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "language",
+          "opts": [
+            "--language"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Include images from the sources, or generate text only (default: server default, images)",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "include_images",
+          "opts": [
+            "--images"
+          ],
+          "required": false,
+          "secondary_opts": [
+            "--text-only"
+          ],
+          "type": {
+            "name": "boolean"
           }
         },
         {
@@ -5372,6 +5446,24 @@
     "generate infographic": {
       "class": "Command",
       "params": [
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
         {
           "kind": "argument",
           "name": "description",
@@ -5761,6 +5853,24 @@
       "class": "Command",
       "params": [
         {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
           "kind": "argument",
           "name": "description",
           "nargs": 1,
@@ -5852,6 +5962,62 @@
               "hard"
             ],
             "name": "choice"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Comma-separated question types to use: multiple-choice, multiple-select, fill-in-the-blank, short-answer (default: all)",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "question_types",
+          "opts": [
+            "--question-types"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Output language code (default: not sent)",
+          "is_flag": false,
+          "kind": "option",
+          "multiple": false,
+          "name": "language",
+          "opts": [
+            "--language"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "text"
+          }
+        },
+        {
+          "default": null,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Include images from the sources, or generate text only (default: server default, images)",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "include_images",
+          "opts": [
+            "--images"
+          ],
+          "required": false,
+          "secondary_opts": [
+            "--text-only"
+          ],
+          "type": {
+            "name": "boolean"
           }
         },
         {
@@ -5977,6 +6143,24 @@
     "generate report": {
       "class": "Command",
       "params": [
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
         {
           "kind": "argument",
           "name": "description",
@@ -6395,6 +6579,24 @@
       "class": "Command",
       "params": [
         {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
+        {
           "kind": "argument",
           "name": "description",
           "nargs": 1,
@@ -6627,6 +6829,24 @@
     "generate video": {
       "class": "Command",
       "params": [
+        {
+          "default": false,
+          "envvar": null,
+          "has_custom_shell_complete": false,
+          "help": "Queue generation for later (usually a few hours).",
+          "is_flag": true,
+          "kind": "option",
+          "multiple": false,
+          "name": "later",
+          "opts": [
+            "--later"
+          ],
+          "required": false,
+          "secondary_opts": [],
+          "type": {
+            "name": "boolean"
+          }
+        },
         {
           "kind": "argument",
           "name": "description",

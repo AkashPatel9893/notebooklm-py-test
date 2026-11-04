@@ -33,6 +33,8 @@ _PREVIEW_SCRUB_CAP = _logging._PREVIEW_SCRUB_CAP
 
 
 __all__ = [
+    "LiveSessionClosedError",
+    "LiveBufferOverflowError",
     # Base
     "NotebookLMError",
     # Cross-domain umbrellas
@@ -288,6 +290,14 @@ class OperationTimeoutError(WaitTimeoutError):
 # =============================================================================
 # Validation/Configuration
 # =============================================================================
+
+
+class LiveSessionClosedError(NotebookLMError):
+    """Audio cannot be sent after a Live session closes."""
+
+
+class LiveBufferOverflowError(NotebookLMError):
+    """A stalled consumer exceeded the configured Live output bounds."""
 
 
 class ValidationError(NotebookLMError):

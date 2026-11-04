@@ -93,6 +93,12 @@ class _AllowlistEntry:
 # constructs a primitive is reported as stale so the list keeps tightening.
 # ---------------------------------------------------------------------------
 ALLOWLIST: tuple[_AllowlistEntry, ...] = (
+    _AllowlistEntry(
+        "src/notebooklm/_live.py",
+        "LiveSession",
+        "Per-connect, single-generation owner: captures its running loop at construction; "
+        "send_audio, events, event advances and aclose assert the same loop. Never reopened.",
+    ),
     # NOTE: ``ClientComposed``, ``SourceUploadPipeline``, and ``ChatAPI`` are
     # NOT allowlisted — they
     # inherit ``set_bound_loop`` from ``LoopBoundPrimitive`` (credited by the

@@ -192,3 +192,58 @@ def test_audio_later_and_wait_are_incompatible() -> None:
 
     with pytest.raises(ValidationError, match="--later cannot be combined with --wait"):
         AudioGenerationRequest(notebook_id="nb", later=True, wait=True)
+
+
+@pytest.mark.parametrize(
+    "kind", ["audio", "video", "slide-deck", "report", "quiz", "flashcards", "infographic"]
+)
+@pytest.mark.asyncio
+async def test_deferred_builder_dispatches_later_without_waiting(kind) -> None:
+    """Forward deferred requests to each API method without starting a waiter."""
+    from notebooklm._app.generation_requests import build_generation_request
+
+    client = _client()
+    method = AsyncMock(return_value=GenerationStatus("scheduled-artifact", "scheduled"))
+    setattr(client.artifacts, "generate_" + kind.replace("-", "_"), method)
+    result = await execute_generation(
+        build_generation_request(kind, notebook_id="nb", later=True),
+        client,
+        notebook_resolver=_notebook,
+        source_resolver=_sources,
+    )
+    assert method.await_args.kwargs["later"] is True
+    assert result.generation.status == "scheduled"
+    client.artifacts.wait_for_completion.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "kind", ["audio", "video", "slide-deck", "report", "quiz", "flashcards", "infographic"]
+)
+def test_deferred_builder_rejects_wait_and_invalid_bool(kind) -> None:
+    """Validate scheduling inputs before dispatch for every supported family."""
+    from notebooklm._app.generation_requests import build_generation_request
+    from notebooklm.exceptions import ValidationError
+
+    with pytest.raises(ValidationError, match="--later cannot be combined with --wait"):
+        build_generation_request(kind, notebook_id="nb", later=True, wait=True)
+    with pytest.raises(ValidationError, match="later must be a bool"):
+        build_generation_request(kind, notebook_id="nb", later="true")
+
+
+@pytest.mark.parametrize(
+    "kind,options",
+    [
+        ("cinematic-video", {}),
+        ("video", {"video_format": "cinematic"}),
+        ("mind-map", {}),
+        ("data-table", {}),
+        ("revise-slide", {}),
+    ],
+)
+def test_deferred_builder_rejects_unsupported_kinds(kind, options) -> None:
+    """Never silently drop the deferred flag for unsupported generation kinds."""
+    from notebooklm._app.generation_requests import build_generation_request
+    from notebooklm.exceptions import ValidationError
+
+    with pytest.raises(ValidationError, match="Deferred generation is not supported"):
+        build_generation_request(kind, notebook_id="nb", later=True, **options)

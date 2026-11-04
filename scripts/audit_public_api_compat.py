@@ -48,6 +48,7 @@ DEFAULT_ALLOWLIST = "scripts/api-compat-allowlist.json"
 EXCLUDED_TOP_LEVEL_MODULES = {"__main__", "notebooklm_cli"}
 EXTRA_PUBLIC_PACKAGES = ("rpc",)
 CLIENT_NAMESPACE_ATTRIBUTES = (
+    "live",
     "artifacts",
     "chat",
     "collections",

@@ -1531,7 +1531,8 @@ def test_public_exports_and_compatibility_signatures_remain_narrow() -> None:
     )
     assert str(inspect.signature(ClientLifecycle)) == (
         "(*, supervisor: 'LifecycleSupervisor', transports: 'Sequence[TransportLifecycle]', "
-        "loop_participants: 'Sequence[LoopParticipant]') -> 'None'"
+        "loop_participants: 'Sequence[LoopParticipant]', "
+        "session_shutdown: 'Callable[[int], Awaitable[None]] | None' = None) -> 'None'"
     )
     web_lifecycle_parameters = inspect.signature(WebTransportLifecycle).parameters
     assert web_lifecycle_parameters["auth"].default is inspect.Parameter.empty

@@ -75,7 +75,9 @@ async def _mcp_connection(directory: Path, port: int, transport: str):
                 raise
             finally:
                 await settle_http_worker(process, directory, primary)
-            assert process.returncode == 0
+            assert process.returncode == 0, (directory / "stderr.log").read_text(
+                encoding="utf-8", errors="replace"
+            )[-4000:]
 
 
 @pytest.mark.parametrize("transport", ["stdio", "http"])

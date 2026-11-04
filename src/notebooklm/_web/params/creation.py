@@ -12,6 +12,32 @@ from ...rpc import nest_source_ids
 from .artifacts import _artifact_client_options
 
 
+def _image_option(request: n.NormalizedQuiz | n.NormalizedFlashcards) -> list[Any] | None:
+    """``image_option { disabled_source_images }`` or ``None`` when not requested."""
+    if request.disabled_source_images is None:
+        return None
+    return [request.disabled_source_images]
+
+
+def _quiz_options(request: n.NormalizedQuiz) -> list[Any]:
+    """Positional ``QuizGenerationOptions``: quantity, difficulty, -, avoid-types, image option."""
+    head: list[Any] = [request.quantity_code, request.difficulty_code]
+    avoid = list(request.avoid_question_type_codes) or None
+    image = _image_option(request)
+    if image is not None:
+        return [*head, None, avoid, image]
+    if avoid is not None:
+        return [*head, None, avoid]
+    return head
+
+
+def _flashcards_options(request: n.NormalizedFlashcards) -> list[Any]:
+    """Positional ``FlashcardsGenerationOptions``: quantity, difficulty, image option."""
+    head: list[Any] = [request.quantity_code, request.difficulty_code]
+    image = _image_option(request)
+    return head if image is None else [*head, image]
+
+
 def encode_creation(request: n.NormalizedArtifactCreationRequest) -> tuple[list[Any], str]:
     sources = nest_source_ids(list(request.source_ids), 2)
     double = nest_source_ids(list(request.source_ids), 1)
@@ -72,11 +98,11 @@ def encode_creation(request: n.NormalizedArtifactCreationRequest) -> tuple[list[
                 2,
                 None,
                 request.instructions,
+                request.language,
                 None,
                 None,
                 None,
-                None,
-                [request.quantity_code, request.difficulty_code],
+                _quiz_options(request),
             ],
         ]
     elif isinstance(request, n.NormalizedFlashcards):
@@ -87,10 +113,10 @@ def encode_creation(request: n.NormalizedArtifactCreationRequest) -> tuple[list[
                 1,
                 None,
                 request.instructions,
+                request.language,
                 None,
                 None,
-                None,
-                [request.quantity_code, request.difficulty_code],
+                _flashcards_options(request),
             ],
         ]
     elif isinstance(request, n.NormalizedInteractiveMindMap):
@@ -127,7 +153,21 @@ def encode_creation(request: n.NormalizedArtifactCreationRequest) -> tuple[list[
     descriptor.extend([None] * (slot - len(descriptor)))
     descriptor.append(config)
     params: list[Any] = [_artifact_client_options(), request.notebook_id, descriptor]
-    if isinstance(request, n.NormalizedAudio) and request.later:
+    if (
+        isinstance(
+            request,
+            (
+                n.NormalizedAudio,
+                n.NormalizedVideo,
+                n.NormalizedReport,
+                n.NormalizedQuiz,
+                n.NormalizedFlashcards,
+                n.NormalizedInfographic,
+                n.NormalizedSlideDeck,
+            ),
+        )
+        and request.later
+    ):
         # CreateArtifactRequest #7 wraps the deferred-generation bool at #1.
         # See docs/android/deferred-audio-generation-evidence.md.
         params.extend([None, None, None, [True]])

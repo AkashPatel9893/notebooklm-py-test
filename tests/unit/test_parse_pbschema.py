@@ -155,3 +155,40 @@ def test_nested_message_keeps_its_dotted_builder_name_as_the_fqn(tmp_path: Path)
     assert message.builder_name == "Outer.Entry"
     assert message.fqn == "google.protobuf.Outer.Entry"
     assert [field["name"] for field in message.fields] == ["key"]
+
+
+def test_generic_bytes_adder_preserves_tag_before_type_code():
+    body = """
+    // r2 = "LiveBlob"
+    // BuilderInfo::BuilderInfo
+    // r2 = 1
+    // r3 = "mimeType"
+    // BuilderInfo::aOS
+    // TypeArguments: <List<int>>
+    // r0 = 2
+    // r16 = "data"
+    // r0 = 32
+    // BuilderInfo::a
+    """
+    _, fields = parse_pbschema.parse_ii_body(body.splitlines())
+    assert fields[-1] == {
+        "tag": 2,
+        "name": "data",
+        "type": "bytes",
+        "repeated": False,
+        "adder": "a",
+    }
+
+
+def test_generic_adder_without_bytes_type_is_not_guessed():
+    _, fields = parse_pbschema.parse_ii_body(
+        [
+            '// r2 = "Example"',
+            "// BuilderInfo::BuilderInfo",
+            "// r0 = 2",
+            '// r3 = "unknown"',
+            "// r0 = 32",
+            "// BuilderInfo::a",
+        ]
+    )
+    assert fields == []

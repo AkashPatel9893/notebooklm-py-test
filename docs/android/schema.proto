@@ -93,6 +93,7 @@ message LiveSessionServerMessage {
 // Protobuf FQN: google.internal.labs.tailwind.api.v1.LiveBlob
 message LiveBlob {
   string mimeType = 1;
+  bytes data = 2;
 }
 // Protobuf FQN: google.internal.labs.tailwind.api.v1.LiveRealtimeInput
 message LiveRealtimeInput {
@@ -364,6 +365,7 @@ message FileArtifact {
   string mimeType = 2;
   string filePreviewUrl = 3;
   string fileDownloadUrl = 4;
+  bytes fileContent = 5;
 }
 
 // ===== google.internal.labs.tailwind.orchestration.v1/generation_context.pb.dart =====

@@ -63,6 +63,7 @@ from notebooklm._types.enums import (
     InfographicStyle,
     QuizDifficulty,
     QuizQuantity,
+    QuizQuestionType,
     ReportFormat,
     SlideDeckFormat,
     SlideDeckLength,
@@ -81,6 +82,7 @@ from notebooklm.exceptions import (
     RateLimitError,
     RPCError,
     ServerError,
+    UnsupportedOperationError,
     ValidationError,
 )
 from notebooklm.types import (
@@ -980,6 +982,79 @@ async def test_generate_flashcards_uses_exact_nested_variant_options() -> None:
     assert options.free_text_steering_prompt == "Key dates"
     assert options.flashcards_generation_options.card_quantity == 3
     assert options.flashcards_generation_options.flashcards_difficulty == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "variant"),
+    [("generate_quiz", "APP_TYPE_QUIZ"), ("generate_flashcards", "APP_TYPE_FLASHCARDS")],
+)
+async def test_generate_quiz_family_sends_language_code_only_when_given(method, variant) -> None:
+    session, _, _, _, api = _graph()
+    session.responses[CREATE_ARTIFACT_METHOD] = _PROTO.CreateArtifactResponse(
+        artifact=_artifact(
+            "app-1", type_code=_PROTO.ARTIFACT_TYPE_APP, variant=getattr(_PROTO, variant)
+        )
+    )
+
+    await getattr(api, method)("notebook-1", source_ids=["source-1"], language="vi")
+    await getattr(api, method)("notebook-1", source_ids=["source-1"])
+
+    with_language = session.calls[0][1].artifact.app.generation_options
+    without_language = session.calls[1][1].artifact.app.generation_options
+    assert with_language.language_code == "vi"
+    assert without_language.language_code == ""
+
+
+def test_android_capabilities_do_not_advertise_quiz_question_types() -> None:
+    _, _, _, _, api = _graph()
+    quiz = next(c for c in api.creation_capabilities if c.family == "quiz")
+    assert "question_types" not in quiz.supported_options
+    assert any("question_types" in text for text in quiz.limitations)
+    assert "language" in quiz.supported_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "variant", "options_name"),
+    [
+        ("generate_quiz", "APP_TYPE_QUIZ", "quiz_generation_options"),
+        ("generate_flashcards", "APP_TYPE_FLASHCARDS", "flashcards_generation_options"),
+    ],
+)
+async def test_generate_quiz_family_sends_image_option_only_when_given(
+    method, variant, options_name
+) -> None:
+    session, _, _, _, api = _graph()
+    session.responses[CREATE_ARTIFACT_METHOD] = _PROTO.CreateArtifactResponse(
+        artifact=_artifact(
+            "app-1", type_code=_PROTO.ARTIFACT_TYPE_APP, variant=getattr(_PROTO, variant)
+        )
+    )
+
+    await getattr(api, method)("notebook-1", source_ids=["source-1"], include_images=False)
+    await getattr(api, method)("notebook-1", source_ids=["source-1"], include_images=True)
+    await getattr(api, method)("notebook-1", source_ids=["source-1"])
+
+    def opts(i):
+        return getattr(session.calls[i][1].artifact.app.generation_options, options_name)
+
+    assert opts(0).HasField("image_option") and opts(0).image_option.disabled_source_images
+    assert opts(1).HasField("image_option") and not opts(1).image_option.disabled_source_images
+    assert not opts(2).HasField("image_option")
+
+
+@pytest.mark.asyncio
+async def test_generate_quiz_question_types_is_unsupported_on_android() -> None:
+    """The Android server ignores the avoid-list, so the option fails loud (live-verified)."""
+    session, _, _, _, api = _graph()
+
+    with pytest.raises(UnsupportedOperationError, match="question_types"):
+        await api.generate_quiz(
+            "notebook-1", source_ids=["source-1"], question_types=[QuizQuestionType.SHORT_ANSWER]
+        )
+
+    assert session.calls == []
 
 
 @pytest.mark.asyncio

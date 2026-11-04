@@ -90,6 +90,7 @@ from notebooklm.rpc.types import (
     InfographicStyle,
     QuizDifficulty,
     QuizQuantity,
+    QuizQuestionType,
     ReportFormat,
     RPCMethod,
     SlideDeckFormat,
@@ -599,6 +600,66 @@ def _expected_rpc_envelope(method: RPCMethod, params: list[Any]) -> list[Any]:
                     [
                         None,
                         [2, None, "Make it practical", None, None, None, None, [1, 3]],
+                    ],
+                ],
+            ],
+        ),
+        (
+            "quiz_language",
+            build_quiz_artifact_params(
+                "nb_payload",
+                ["src_alpha"],
+                instructions=None,
+                quantity=None,
+                difficulty=None,
+                language="vi",
+            ),
+            [
+                _ARTIFACT_CLIENT_OPTIONS,
+                "nb_payload",
+                [
+                    None,
+                    None,
+                    4,
+                    [[["src_alpha"]]],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    [
+                        None,
+                        [2, None, None, "vi", None, None, None, [2, 2]],
+                    ],
+                ],
+            ],
+        ),
+        (
+            "flashcards_language",
+            build_flashcards_artifact_params(
+                "nb_payload",
+                ["src_alpha"],
+                instructions=None,
+                quantity=None,
+                difficulty=None,
+                language="vi",
+            ),
+            [
+                _ARTIFACT_CLIENT_OPTIONS,
+                "nb_payload",
+                [
+                    None,
+                    None,
+                    4,
+                    [[["src_alpha"]]],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    [
+                        None,
+                        [1, None, None, "vi", None, None, [2, 2]],
                     ],
                 ],
             ],
@@ -2032,3 +2093,112 @@ class TestNoteShapeConfusionHasTeeth:
         swapped = NoteRow(["ID", swapped_inner])
         assert swapped.content == "REAL_TITLE"
         assert swapped.title == "REAL_CONTENT"
+
+
+@pytest.mark.parametrize("bad", ["", "  ", 5])
+@pytest.mark.parametrize("builder", [build_quiz_artifact_params, build_flashcards_artifact_params])
+def test_quiz_family_rejects_invalid_language(builder, bad) -> None:
+    with pytest.raises(ValidationError):
+        builder(
+            "nb_payload",
+            ["src_alpha"],
+            instructions=None,
+            quantity=None,
+            difficulty=None,
+            language=bad,
+        )
+
+
+@pytest.mark.parametrize(
+    ("selected", "avoided"),
+    [
+        ((QuizQuestionType.SHORT_ANSWER,), [1, 2, 3]),
+        ((QuizQuestionType.MULTIPLE_CHOICE, QuizQuestionType.SHORT_ANSWER), [1, 3]),
+        ((QuizQuestionType.FILL_IN_THE_BLANK,), [2, 3, 4]),
+    ],
+)
+def test_quiz_question_types_encode_the_avoid_list(selected, avoided) -> None:
+    """The wire carries the *avoided* types at options index 3 (live-verified)."""
+    params = build_quiz_artifact_params(
+        "nb_payload",
+        ["src_alpha"],
+        instructions=None,
+        quantity=None,
+        difficulty=None,
+        question_types=selected,
+    )
+    assert params[2][9][1][7] == [2, 2, None, avoided]
+
+
+def test_quiz_question_types_all_or_none_send_no_avoid_list() -> None:
+    kwargs = {"instructions": None, "quantity": None, "difficulty": None}
+    every = build_quiz_artifact_params(
+        "nb_payload", ["src_alpha"], question_types=tuple(QuizQuestionType), **kwargs
+    )
+    default = build_quiz_artifact_params("nb_payload", ["src_alpha"], **kwargs)
+    assert every == default
+    assert default[2][9][1][7] == [2, 2]
+
+
+@pytest.mark.parametrize(
+    "bad", [(), "multiple_choice", (99,), (True,), (QuizDifficulty.MEDIUM,), 2]
+)
+def test_quiz_question_types_rejects_invalid(bad) -> None:
+    with pytest.raises(ValidationError):
+        build_quiz_artifact_params(
+            "nb_payload",
+            ["src_alpha"],
+            instructions=None,
+            quantity=None,
+            difficulty=None,
+            question_types=bad,
+        )
+
+
+@pytest.mark.parametrize(
+    ("include_images", "image_option"), [(False, [True]), (True, [False]), (None, None)]
+)
+def test_quiz_and_flashcards_encode_the_image_option(include_images, image_option) -> None:
+    """``include_images`` is sent inverted as ``image_option { disabled_source_images }``.
+
+    Quiz: options index 4 (field 5); flashcards: options index 2 (field 3). Derived
+    from the Web app's own request serializer.
+    """
+    kwargs = {
+        "instructions": None,
+        "quantity": None,
+        "difficulty": None,
+        "include_images": include_images,
+    }
+    quiz = build_quiz_artifact_params("nb_payload", ["src_alpha"], **kwargs)
+    cards = build_flashcards_artifact_params("nb_payload", ["src_alpha"], **kwargs)
+    assert quiz[2][9][1][7] == (
+        [2, 2] if image_option is None else [2, 2, None, None, image_option]
+    )
+    assert cards[2][9][1][6] == ([2, 2] if image_option is None else [2, 2, image_option])
+
+
+def test_quiz_image_option_composes_with_question_types() -> None:
+    params = build_quiz_artifact_params(
+        "nb_payload",
+        ["src_alpha"],
+        instructions=None,
+        quantity=None,
+        difficulty=None,
+        question_types=(QuizQuestionType.SHORT_ANSWER,),
+        include_images=False,
+    )
+    assert params[2][9][1][7] == [2, 2, None, [1, 2, 3], [True]]
+
+
+@pytest.mark.parametrize("bad", [0, 1, "no"])
+def test_include_images_must_be_a_bool(bad) -> None:
+    with pytest.raises(ValidationError):
+        build_quiz_artifact_params(
+            "nb_payload",
+            ["src_alpha"],
+            instructions=None,
+            quantity=None,
+            difficulty=None,
+            include_images=bad,
+        )

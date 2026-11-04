@@ -71,7 +71,7 @@ async def test_chat_backpressure_bounds_concurrency_and_leaves_healthz_free(
         first = asyncio.create_task(
             client.post("/v1/notebooks/nb-1/chat", json={"question": "one"})
         )
-        await asyncio.wait_for(hold.entered.wait(), timeout=1)
+        await hold.wait_until_entered()
 
         second = asyncio.create_task(
             client.post("/v1/notebooks/nb-1/chat", json={"question": "two"})
@@ -116,7 +116,7 @@ async def test_source_mutation_backpressure_bounds_concurrency(
                 json={"title": "one", "text": "one"},
             )
         )
-        await asyncio.wait_for(hold.entered.wait(), timeout=1)
+        await hold.wait_until_entered()
 
         second = asyncio.create_task(
             client.post(
@@ -167,7 +167,7 @@ async def test_file_upload_backpressure_bounds_concurrency(
                 files={"file": ("one.txt", b"one", "text/plain")},
             )
         )
-        await asyncio.wait_for(hold.entered.wait(), timeout=1)
+        await hold.wait_until_entered()
 
         second = asyncio.create_task(
             client.post(

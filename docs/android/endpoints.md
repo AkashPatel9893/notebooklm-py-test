@@ -11,7 +11,7 @@ and cross-referenced to the 48-method Web registry used for that audit. The newe
 The original traffic capture exercised 21 methods and decoded their wire shapes here; later direct
 bearer/gRPC probes also exercised APK-unwired methods and destructive APK-present methods on
 disposable copies. The
-**complete protobuf schema** — 326 messages / 879 fields with real field names, tags, types, and
+**complete protobuf schema** — 326 messages / 881 fields with real field names, tags, types, and
 cardinality — was recovered by decompiling the Flutter binary with a Dart-ported blutter (3.13 for the
 `1.46.7` snapshot, 3.14 for the current `1.55.10` regeneration), and
 is checked in at **[android/schema.proto](schema.proto)**. The inline shapes below keep their
@@ -44,7 +44,10 @@ carry notebook IDs, source text, and chat history.
 | Success | HTTP 200 + trailer `grpc-status: 0` |
 
 Most methods are unary (single request message, single response message);
-`GenerateFreeFormStreamed` and `StreamLiveSession` are server-streaming.
+`GenerateFreeFormStreamed` is server-streaming. `StreamLiveSession` is
+**bidirectional streaming**, with audio bytes in protobuf messages, and uses
+`labstailwind.pa.googleapis.com:443`. Authenticated host probes verified setup,
+audio exchange and events; see [Live Voice evidence](live-session-static-evidence.md).
 
 ## Complete service surface (`1.46.7` binary snapshot)
 
@@ -87,8 +90,9 @@ section is intentionally not rewritten to pretend those methods existed in `1.46
 Notable methods present in the `1.46.7` binary but **not exercised by the mobile UI**: `CreateNote` /
 `MutateNote` / `DeleteNotes` (note CRUD — UI only reads via `GetNotes`), `ActOnSources` (mind
 maps on web), `DeriveArtifact` / `UpdateArtifact` / `SuggestArtifacts`, `GeneratePromptSuggestions`,
-`MutateAccount`, `SubmitFeedback`, `GetIceConfig` / `SendSdpOffer` / `StreamLiveSession` (WebRTC
-interactive-audio "Live"), `GetDriveSourceStatus`, `ListExpertIntelligenceContent`, and
+`MutateAccount`, `SubmitFeedback`, `GetIceConfig` / `SendSdpOffer` (WebRTC interactivity),
+`StreamLiveSession` (bidirectional Live Voice; see [static evidence](live-session-static-evidence.md)),
+`GetDriveSourceStatus`, `ListExpertIntelligenceContent`, and
 `PrototypeNotebookSearch` (experimental search).
 
 ## Android ⇄ web cross-reference
@@ -202,9 +206,9 @@ Status vocabulary below:
 | GetArtifactUserState | no standalone public API |
 | UpsertArtifactUserState | no standalone public API |
 | GetDriveSourceStatus | no exact caller; source freshness uses `CheckSourceFreshness` |
-| GetIceConfig | Live/WebRTC not implemented |
-| SendSdpOffer | Live/WebRTC not implemented |
-| StreamLiveSession | Live/WebRTC not implemented |
+| GetIceConfig | Interactive Audio Overview gRPC spike verified; SDK interface deferred |
+| SendSdpOffer | Interactive Audio Overview gRPC spike verified; SDK interface deferred |
+| StreamLiveSession | Experimental Android `client.live.connect()` with reconnection disabled; direct audio/token probes verified ([usage](../live-voice.md), [evidence](live-session-static-evidence.md)) |
 | ListExpertIntelligenceContent | no public API |
 | LogInteractionEvent | telemetry intentionally not implemented |
 | SubmitFeedback | no public API |

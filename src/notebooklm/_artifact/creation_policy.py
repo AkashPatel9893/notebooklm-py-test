@@ -7,6 +7,7 @@ accepted sets here; capability metadata is not permission to tighten them.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, cast
@@ -21,6 +22,7 @@ from .._types.enums import (
     InfographicStyle,
     QuizDifficulty,
     QuizQuantity,
+    QuizQuestionType,
     ReportFormat,
     SlideDeckFormat,
     SlideDeckLength,
@@ -64,6 +66,56 @@ def _language(value: str, policy: CreationPolicy) -> str:
     if policy.strict_inputs and (not isinstance(value, str) or not value.strip()):
         raise ValidationError("language must be a non-empty string")
     return value
+
+
+def _optional_language(value: str | None) -> str | None:
+    """Strictly validate an optional language on every backend (``None`` omits it)."""
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise ValidationError("language must be a non-empty string or None")
+    return value
+
+
+def coerce_question_types(value: object) -> tuple[QuizQuestionType, ...] | None:
+    """Turn a caller's ``question_types`` into a tuple, or raise ``ValidationError``."""
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise ValidationError("question_types must be a non-empty sequence of QuizQuestionType")
+    return tuple(value)
+
+
+def _disabled_source_images(include_images: bool | None) -> bool | None:
+    """Map ``include_images`` onto the wire's ``disabled_source_images`` flag.
+
+    ``None`` omits the option (server default: images included).
+    """
+    if include_images is None:
+        return None
+    if not isinstance(include_images, bool):
+        raise ValidationError("include_images must be a bool or None")
+    return not include_images
+
+
+def _avoided_question_types(
+    selected: tuple[QuizQuestionType, ...] | None, *, flashcards: bool
+) -> tuple[int, ...]:
+    """Convert the selected question types into the wire's avoid-list.
+
+    The wire carries the types to *avoid*, so the selection is inverted. ``None``
+    (or every type) sends nothing, which keeps the server default.
+    """
+    if selected is None:
+        return ()
+    if flashcards:
+        raise ValidationError("question_types is only supported for quizzes")
+    if isinstance(selected, (str, bytes)) or not selected:
+        raise ValidationError("question_types must be a non-empty sequence of QuizQuestionType")
+    if not all(isinstance(t, QuizQuestionType) for t in selected):
+        # An int/bool or another option family's enum (e.g. QuizDifficulty.MEDIUM == 2)
+        # would otherwise silently select a different question type.
+        raise ValidationError("question_types must contain only QuizQuestionType values")
+    chosen = set(selected)
+    return tuple(sorted(int(t) for t in set(QuizQuestionType) - chosen))
 
 
 def _text(value: str | None, parameter: str, policy: CreationPolicy) -> str | None:
@@ -142,6 +194,7 @@ def normalize_creation(
             format_code,
             style_code,
             prompt,
+            request.later,
         )
     if isinstance(request, raw.CinematicVideoCreationRequest):
         return normalized.NormalizedCinematicVideo(
@@ -169,20 +222,31 @@ def normalize_creation(
             title, description, directive = _REPORT_CONFIGS[fmt]
             if extra:
                 directive = f"{directive}\n\n{extra}"
-        return normalized.NormalizedReport(nb, sources, language, title, description, directive)
+        return normalized.NormalizedReport(
+            nb, sources, language, title, description, directive, request.later
+        )
     if isinstance(request, raw.QuizCreationRequest):
         cls = (
             normalized.NormalizedFlashcards
             if isinstance(request, raw.FlashcardsCreationRequest)
             else normalized.NormalizedQuiz
         )
-        return cls(
+        common = (
             nb,
             sources,
             _text(request.instructions, "instructions", policy),
             _code(request.quantity, DEFAULT_QUIZ_QUANTITY, "quantity", strict=True),
             _code(request.difficulty, DEFAULT_QUIZ_DIFFICULTY, "difficulty", strict=True),
+            request.later,
+            _optional_language(request.language),
         )
+        avoided = _avoided_question_types(
+            request.question_types, flashcards=cls is normalized.NormalizedFlashcards
+        )
+        disabled_images = _disabled_source_images(request.include_images)
+        if cls is normalized.NormalizedFlashcards:
+            return normalized.NormalizedFlashcards(*common, disabled_images)
+        return normalized.NormalizedQuiz(*common, avoided, disabled_images)
     if isinstance(request, raw.InfographicCreationRequest):
         return normalized.NormalizedInfographic(
             nb,
@@ -194,6 +258,7 @@ def normalize_creation(
             ),
             _code(request.detail_level, InfographicDetail.STANDARD, "detail_level", strict=strict),
             _code(request.style, InfographicStyle.AUTO_SELECT, "style", strict=strict),
+            request.later,
         )
     if isinstance(request, raw.SlideDeckCreationRequest):
         return normalized.NormalizedSlideDeck(
@@ -205,6 +270,7 @@ def normalize_creation(
                 request.slide_format, SlideDeckFormat.DETAILED_DECK, "slide_format", strict=strict
             ),
             _code(request.slide_length, SlideDeckLength.DEFAULT, "slide_length", strict=strict),
+            request.later,
         )
     if isinstance(request, raw.DataTableCreationRequest):
         return normalized.NormalizedDataTable(

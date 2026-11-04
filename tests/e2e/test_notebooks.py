@@ -139,7 +139,7 @@ class TestNotebookRecent:
 
     @pytest.mark.asyncio
     async def test_remove_from_recent(self, client, temp_notebook):
-        """Test removing notebook from recent list."""
-        # This should complete without error
+        """Removing an owned notebook from shared recents is a harmless no-op."""
         await client.notebooks.remove_from_recent(temp_notebook.id)
-        # No return value expected, just no exception
+        notebook = await client.notebooks.get(temp_notebook.id)
+        assert notebook.id == temp_notebook.id

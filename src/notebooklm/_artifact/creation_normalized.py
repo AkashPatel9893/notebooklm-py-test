@@ -34,6 +34,7 @@ class NormalizedVideo(_NormalizedCreation):
     format_code: int
     style_code: int
     style_prompt: str | None
+    later: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class NormalizedReport(_NormalizedCreation):
     title: str
     description: str
     directive: str
+    later: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,10 @@ class NormalizedQuiz(_NormalizedCreation):
     instructions: str | None
     quantity_code: int
     difficulty_code: int
+    later: bool = False
+    language: str | None = None
+    avoid_question_type_codes: tuple[int, ...] = ()
+    disabled_source_images: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,9 @@ class NormalizedFlashcards(_NormalizedCreation):
     instructions: str | None
     quantity_code: int
     difficulty_code: int
+    later: bool = False
+    language: str | None = None
+    disabled_source_images: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,7 @@ class NormalizedInfographic(_NormalizedCreation):
     orientation_code: int
     detail_code: int
     style_code: int
+    later: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,7 @@ class NormalizedSlideDeck(_NormalizedCreation):
     instructions: str | None
     format_code: int
     length_code: int
+    later: bool = False
 
 
 @dataclass(frozen=True)

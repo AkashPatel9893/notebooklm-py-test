@@ -15,7 +15,7 @@ from notebooklm._app.generate_retry import (
 from notebooklm.cli import helpers as helpers_module
 from notebooklm.cli.polling_ui import status_with_elapsed
 from notebooklm.notebooklm_cli import cli
-from notebooklm.rpc.types import ReportFormat
+from notebooklm.rpc.types import QuizQuestionType, ReportFormat
 
 from .conftest import create_mock_client, inject_client, mind_map_result
 
@@ -1113,22 +1113,73 @@ class TestGenerateLanguageValidation:
         assert "Unknown language code: invalid_code" in result.output
         assert "notebooklm language list" in result.output
 
-    def test_valid_language_code_accepted(self, runner, mock_auth):
-        """Test that valid language codes are accepted."""
+    @pytest.mark.parametrize(
+        ("command", "method"),
+        [
+            ("audio", "generate_audio"),
+            ("quiz", "generate_quiz"),
+            ("flashcards", "generate_flashcards"),
+        ],
+    )
+    def test_valid_language_code_accepted(self, runner, mock_auth, command, method):
+        """Valid language codes are accepted and forwarded; quiz/flashcards omit it by default."""
         mock_client = create_mock_client()
-        mock_client.artifacts.generate_audio = AsyncMock(
-            return_value={"artifact_id": "audio_123", "status": "processing"}
-        )
+        generate = AsyncMock(return_value={"task_id": "t1", "status": "processing"})
+        setattr(mock_client.artifacts, method, generate)
         with patch.object(
             auth_module, "fetch_tokens_with_domains", new_callable=AsyncMock
         ) as mock_fetch:
             mock_fetch.return_value = ("csrf", "session")
             result = runner.invoke(
                 cli,
-                ["generate", "audio", "-n", "nb_123", "--language", "ja"],
+                ["generate", command, "-n", "nb_123", "--language", "ja"],
                 obj=inject_client(mock_client),
             )
-        assert result.exit_code == 0
+            default = runner.invoke(
+                cli, ["generate", command, "-n", "nb_123"], obj=inject_client(mock_client)
+            )
+            if command != "audio":
+                text_only = runner.invoke(
+                    cli,
+                    ["generate", command, "-n", "nb_123", "--text-only"],
+                    obj=inject_client(mock_client),
+                )
+            if command == "quiz":
+                typed = runner.invoke(
+                    cli,
+                    [
+                        "generate",
+                        "quiz",
+                        "-n",
+                        "nb_123",
+                        "--question-types",
+                        "multiple-choice, short-answer,multiple-choice",
+                    ],
+                    obj=inject_client(mock_client),
+                )
+                bad = runner.invoke(
+                    cli,
+                    ["generate", "quiz", "-n", "nb_123", "--question-types", "essay"],
+                    obj=inject_client(mock_client),
+                )
+        assert result.exit_code == 0, result.output
+        assert default.exit_code == 0, default.output
+        assert generate.call_args_list[0].kwargs["language"] == "ja"
+        if command != "audio":
+            assert "language" not in generate.call_args_list[1].kwargs
+        if command != "audio":
+            assert text_only.exit_code == 0, text_only.output
+            assert generate.call_args_list[2].kwargs["include_images"] is False
+            assert "include_images" not in generate.call_args_list[1].kwargs
+        if command == "quiz":
+            assert "question_types" not in generate.call_args_list[1].kwargs
+            assert typed.exit_code == 0, typed.output
+            assert generate.call_args_list[3].kwargs["question_types"] == [
+                QuizQuestionType.MULTIPLE_CHOICE,
+                QuizQuestionType.SHORT_ANSWER,
+            ]
+            assert bad.exit_code != 0
+            assert "multiple-choice" in bad.output
 
 
 # =============================================================================
@@ -2243,15 +2294,19 @@ class TestArtifactGenerationExitCodes:
         assert "Transcription error" in data["message"]
 
 
+@pytest.mark.parametrize(
+    "kind", ["audio", "video", "report", "quiz", "flashcards", "infographic", "slide-deck"]
+)
 @pytest.mark.parametrize("json_output", [False, True])
-def test_generate_audio_later_reports_scheduled(runner, monkeypatch, json_output):
+def test_generate_later_reports_scheduled(runner, monkeypatch, json_output, kind):
+    """Expose the queued task through human and JSON output for every CLI family."""
     from notebooklm.types import GenerationStatus
 
     client = create_mock_client()
-    client.artifacts.generate_audio = AsyncMock(
-        return_value=GenerationStatus(task_id="deferred-audio", status="scheduled")
-    )
-    args = ["generate", "audio", "-n", "nb_123", "--later"]
+    method = AsyncMock(return_value=GenerationStatus(task_id="deferred-audio", status="scheduled"))
+    method_name = "generate_" + kind.replace("-", "_")
+    setattr(client.artifacts, method_name, method)
+    args = ["generate", kind, "-n", "nb_123", "--later"]
     if json_output:
         args.append("--json")
     monkeypatch.setattr(
@@ -2261,7 +2316,7 @@ def test_generate_audio_later_reports_scheduled(runner, monkeypatch, json_output
     )
     result = runner.invoke(cli, args, obj=inject_client(client))
     assert result.exit_code == 0, result.output
-    assert client.artifacts.generate_audio.await_args.kwargs["later"] is True
+    assert getattr(client.artifacts, method_name).await_args.kwargs["later"] is True
     client.artifacts.wait_for_completion.assert_not_called()
     if json_output:
         assert json.loads(result.output) == {"task_id": "deferred-audio", "status": "scheduled"}
@@ -2270,18 +2325,47 @@ def test_generate_audio_later_reports_scheduled(runner, monkeypatch, json_output
         assert "Started:" not in result.output
 
 
+@pytest.mark.parametrize(
+    "kind", ["audio", "video", "report", "quiz", "flashcards", "infographic", "slide-deck"]
+)
 @pytest.mark.parametrize("json_output", [False, True])
-def test_generate_audio_later_rejects_wait_before_generation(runner, monkeypatch, json_output):
+@pytest.mark.parametrize("flags", [("--later", "--wait"), ("--wait", "--later")])
+def test_generate_later_rejects_wait_before_generation(
+    runner, monkeypatch, json_output, kind, flags
+):
+    """Reject conflicting CLI flags without submitting a generation request."""
     client = create_mock_client()
-    args = ["generate", "audio", "-n", "nb_123", "--later", "--wait"]
+    method_name = "generate_" + kind.replace("-", "_")
+    args = ["generate", kind, "-n", "nb_123", *flags]
     if json_output:
         args.append("--json")
-    monkeypatch.setattr(
-        helpers_module,
-        "get_auth_tokens",
-        lambda _ctx: auth_module.AuthTokens(cookies={}, csrf_token="csrf", session_id="session"),
-    )
+    auth_load = MagicMock(side_effect=AssertionError("invalid flags must not authenticate"))
+    monkeypatch.setattr(helpers_module, "get_auth_tokens", auth_load)
     result = runner.invoke(cli, args, obj=inject_client(client))
     assert result.exit_code != 0
     assert "--later cannot be combined with --wait" in result.output
-    client.artifacts.generate_audio.assert_not_called()
+    getattr(client.artifacts, method_name).assert_not_called()
+    auth_load.assert_not_called()
+    if json_output:
+        assert json.loads(result.output)["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("args", [["video", "--format", "cinematic"], ["cinematic-video"]])
+@pytest.mark.parametrize("json_output", [False, True])
+def test_cinematic_later_rejected_before_generation(runner, monkeypatch, args, json_output):
+    """Reject deferred cinematic requests through both command spellings."""
+    client = create_mock_client()
+    auth_load = MagicMock(side_effect=AssertionError("unsupported flags must not authenticate"))
+    monkeypatch.setattr(helpers_module, "get_auth_tokens", auth_load)
+    command = ["generate", *args, "-n", "nb_123", "--later"]
+    if json_output:
+        command.append("--json")
+    result = runner.invoke(cli, command, obj=inject_client(client))
+    assert result.exit_code != 0
+    assert "Deferred generation is not supported" in result.output
+    client.artifacts.generate_video.assert_not_called()
+    client.artifacts.generate_cinematic_video.assert_not_called()
+
+    auth_load.assert_not_called()
+    if json_output:
+        assert json.loads(result.output)["code"] == "VALIDATION_ERROR"

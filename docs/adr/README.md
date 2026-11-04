@@ -74,6 +74,7 @@ The ADR Index table utilizes five eras of Status notation to reflect the lifecyc
 | [0037](0037-live-usage-and-quota-api.md) | Live usage and quota API | Accepted |
 | [0038](0038-local-fault-injection-harness.md) | Local fault-injection services and concurrent resilience scenarios | Accepted |
 | [0039](0039-backend-specific-credential-surfaces.md) | Backend-specific credential surfaces | Accepted; C9b implementation remains release-gated |
+| [0040](0040-live-voice-session-api.md) | Android Live Voice session API | Accepted; experimental implementation, reconnect gated |
 
 ADR-0007 ships alongside its enforcement substrate: the concrete fixtures (`tests/_fixtures/`) and meta-lint (`tests/_guardrails/test_no_forbidden_monkeypatches.py`) are added in the same PR (`arch-d1-fixtures-scaffolding`) so the record is grounded in working code rather than an empty placeholder.
 

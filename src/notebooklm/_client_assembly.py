@@ -74,10 +74,20 @@ def _install_client(
     if sidecar is not None:
         transports = (*transports, sidecar)
         loop_participants = (*loop_participants, sidecar)
+    from ._live import LiveAPI
+
+    live = LiveAPI(
+        assembly.shared.call_supervisor,
+        assembly.runtime if not isinstance(assembly, WebAssembly) else None,
+        backend=preference.preferred,
+    )
+    assembly.shared.call_supervisor.register_drain_hook("live", live._shutdown)
+    client.live = live
     lifecycle = ClientLifecycle(
         supervisor=assembly.shared.call_supervisor,
         transports=transports,
         loop_participants=loop_participants,
+        session_shutdown=live._shutdown,
     )
     client._auth = auth
     client._account_email_cache = None

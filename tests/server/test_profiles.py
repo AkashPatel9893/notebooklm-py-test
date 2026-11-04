@@ -515,7 +515,7 @@ async def test_chat_capacity_is_shared_across_profiles(monkeypatch: pytest.Monke
                 headers={"X-NotebookLM-Profile": "work"},
             )
         )
-        await asyncio.wait_for(hold.entered.wait(), 1)
+        await hold.wait_until_entered()
         second = asyncio.create_task(
             client.post(
                 "/v1/notebooks/nb/chat",

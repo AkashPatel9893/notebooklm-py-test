@@ -13,6 +13,15 @@ class ActiveHold:
         self.max_active = 0
         self._lock = asyncio.Lock()
 
+    async def wait_until_entered(self) -> None:
+        """Wait for handler startup, not a one-second response-time guarantee.
+
+        Allow scheduling headroom for startup in full wheel-qualification
+        runs. The event still orders requests deterministically;
+        this deadline is only a watchdog, not the concurrency assertion.
+        """
+        await asyncio.wait_for(self.entered.wait(), timeout=10)
+
     async def enter(self) -> None:
         async with self._lock:
             self.active += 1

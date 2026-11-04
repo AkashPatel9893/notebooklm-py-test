@@ -46,6 +46,9 @@ except PackageNotFoundError:
         __version__,
     )
 
+# Public API: Android Live Voice
+from ._live import LiveSession
+
 # Public API: Authentication
 from .auth import AuthTokens
 
@@ -121,6 +124,17 @@ from .exceptions import (
     # Cross-domain umbrellas (wait/poll timeouts)
     WaitTimeoutError,
 )
+from .live import (
+    LiveAudio,
+    LiveBufferOverflowError,
+    LiveEstablished,
+    LiveEvent,
+    LiveGoAway,
+    LiveInterrupted,
+    LiveSessionClosedError,
+    LiveTranscript,
+    LiveTurnComplete,
+)
 
 # Public API: Types and dataclasses
 from .types import (
@@ -191,6 +205,7 @@ from .types import (
     PromptSuggestion,
     QuizDifficulty,
     QuizQuantity,
+    QuizQuestionType,
     RelevantChunk,
     ReportFormat,
     ReportPreset,
@@ -245,6 +260,17 @@ __all__ = [
     "__version__",
     # Client (main entry point)
     "NotebookLMClient",
+    # Android Live Voice
+    "LiveSession",
+    "LiveAudio",
+    "LiveBufferOverflowError",
+    "LiveEstablished",
+    "LiveEvent",
+    "LiveGoAway",
+    "LiveInterrupted",
+    "LiveSessionClosedError",
+    "LiveTranscript",
+    "LiveTurnComplete",
     # Auth
     "AuthTokens",
     # Observability
@@ -404,6 +430,7 @@ __all__ = [
     "VideoStyle",
     "QuizQuantity",
     "QuizDifficulty",
+    "QuizQuestionType",
     "InfographicOrientation",
     "InfographicDetail",
     "InfographicStyle",

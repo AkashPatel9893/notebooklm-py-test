@@ -124,6 +124,7 @@ async def test_customization_choices_delegates_to_the_single_typed_read_hook() -
 
 
 def test_creation_capabilities_are_immutable_implementation_metadata() -> None:
+    """Advertise deferred support only for the implemented creation families."""
     capabilities = _ConcreteArtifacts().creation_capabilities
     assert isinstance(capabilities, tuple)
     assert next(item for item in capabilities if item.family == "video").supported_options == (
@@ -132,7 +133,19 @@ def test_creation_capabilities_are_immutable_implementation_metadata() -> None:
         "video_format",
         "video_style",
         "style_prompt",
+        "later",
     )
+    deferred_families = {
+        "audio",
+        "video",
+        "report",
+        "quiz",
+        "flashcards",
+        "infographic",
+        "slide_deck",
+    }
+    for capability in capabilities:
+        assert ("later" in capability.supported_options) == (capability.family in deferred_families)
 
 
 @pytest.mark.asyncio

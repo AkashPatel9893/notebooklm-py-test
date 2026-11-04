@@ -151,8 +151,10 @@ class ClientLifecycle:
         supervisor: LifecycleSupervisor,
         transports: Sequence[TransportLifecycle],
         loop_participants: Sequence[LoopParticipant],
+        session_shutdown: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         self._supervisor = supervisor
+        self._session_shutdown = session_shutdown
         self._transports = tuple(transports)
         self._loop_participants = tuple(loop_participants)
         self._state = _ResourceState.CLOSED
@@ -430,6 +432,8 @@ class ClientLifecycle:
                 raise
             if await self._join_close_race(loop, epoch):
                 return
+            if self._session_shutdown is not None:
+                await self._session_shutdown(epoch)
             try:
                 await self._supervisor.wait_for_idle(epoch, timeout)
             except RuntimeError:

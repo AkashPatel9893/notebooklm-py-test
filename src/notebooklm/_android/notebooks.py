@@ -17,13 +17,20 @@ from ..exceptions import (
     AuthError,
     DecodingError,
     NetworkError,
+    NotebookLMError,
     RateLimitError,
     RPCError,
     ServerError,
     ValidationError,
 )
 from ..outcomes import CommitState
-from ..types import NextStepSuggestion, Notebook, NotebookDescription, PromptSuggestion
+from ..types import (
+    NextStepSuggestion,
+    Notebook,
+    NotebookDescription,
+    PromptSuggestion,
+    SharePermission,
+)
 from .epoch import bind_workflow_epoch, reset_workflow_epoch
 from .session import AndroidSession
 
@@ -46,6 +53,7 @@ _MAX_CREATED_CHAT_SESSION_HINTS = 256
 # gRPC INTERNAL. The route refuses a project the caller owns; see
 # ``remove_from_recent``.
 _INTERNAL_RPC_CODE = 13
+_INVALID_ARGUMENT_RPC_CODE = 3
 
 
 def _read_proto() -> Any:
@@ -467,9 +475,9 @@ class AndroidNotebooksAPI(NotebooksAPI):
         exercising it against an owned notebook, which it legitimately refuses.
 
         Web returns success for an owned notebook while leaving it in place, so
-        ``INTERNAL`` here is folded into the same no-op rather than surfaced as
-        a backend-visible parity break: the postcondition ("not in the
-        recently-viewed list") already holds in exactly that case.
+        ``INTERNAL`` and ``INVALID_ARGUMENT`` are folded into the same no-op
+        when a fresh read explicitly identifies the caller as owner. Refusals
+        for invalid IDs and shared projects must still surface to the caller.
         """
         empty_type = _empty_message_type()
         notebook_proto = _notebook_proto()
@@ -484,11 +492,18 @@ class AndroidNotebooksAPI(NotebooksAPI):
                 response_type=empty_type,
             )
         except RPCError as exc:
-            if exc.rpc_code != _INTERNAL_RPC_CODE:
+            if exc.rpc_code not in (_INTERNAL_RPC_CODE, _INVALID_ARGUMENT_RPC_CODE):
+                raise
+            try:
+                notebook = await self.get(notebook_id)
+            except NotebookLMError:
+                raise exc from None
+            if notebook.role is not SharePermission.OWNER:
                 raise
             logger.debug(
-                "RemoveRecentlyViewedProject returned INTERNAL for %s; "
-                "treating as the Web no-op for a non-shared project",
+                "RemoveRecentlyViewedProject returned rpc_code=%s for owned %s; "
+                "treating as the Web no-op",
+                exc.rpc_code,
                 notebook_id,
             )
 
