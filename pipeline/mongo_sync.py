@@ -40,7 +40,7 @@ from typing import Any
 
 PIPELINE = "notebooklm-pipeline"
 # Bump when the document shapes written here change, so every chapter re-syncs.
-SCHEMA_VERSION = "12"  # 12: remove redundant thumbnails from NCERTResource items
+SCHEMA_VERSION = "13"  # 13: WebP previews, slide page previews, video GIF, mind-map preview
 MARKER = "mongo.json"  # local per-chapter record of the last sync
 # Local files a sync reads; a chapter is saved once any of them exists.
 CONTENT_FILES = ("mind_map.json", "quiz.json", "flashcards.json", "drive.json", "youtube.json")
@@ -163,6 +163,37 @@ def convert_flashcards(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+# Item key → preview file (made by thumbnails.py) whose Drive link is its thumbnail.
+ITEM_PREVIEWS = {
+    "source_pdf": "chapter_thumbnail.webp",
+    "slides": "slides_page_1.webp",
+    "infographic": "infographic_thumbnail.webp",
+    "audio": "podcast_thumbnail.webp",
+}
+
+
+def _link(entry: dict[str, Any] | None) -> str:
+    return ((entry or {}).get("preview_url") or (entry or {}).get("view_url") or "").strip()
+
+
+def _slide_pages(drive: dict[str, Any]) -> list[str]:
+    """Preview links of every slide page, in page order."""
+    pages = []
+    for name, entry in drive.items():
+        number = name.removeprefix("slides_page_").removesuffix(".webp")
+        if name.startswith("slides_page_") and name.endswith(".webp") and number.isdigit():
+            pages.append((int(number), _link(entry)))
+    return [url for _, url in sorted(pages) if url]
+
+
+def _gif_link(entry: dict[str, Any] | None) -> str:
+    """Direct image link for the animated GIF (a /preview page would not animate in <Image>)."""
+    if not entry or not entry.get("id"):
+        return ""
+    version = f"&v={entry['md5'][:12]}" if entry.get("md5") else ""
+    return f"https://drive.google.com/uc?export=view&id={entry['id']}{version}"
+
+
 def _load(path: Path) -> Any | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -191,6 +222,42 @@ def needs_sync(cdir: Path) -> bool:
 # --------------------------------------------------------------------------- #
 # Writes
 # --------------------------------------------------------------------------- #
+
+
+def build_items(drive: dict[str, Any], youtube: dict[str, Any]) -> list[dict[str, Any]]:
+    """NCERTResource items for one chapter, with their preview links."""
+    items: list[dict[str, Any]] = []
+    # Only what can't be derived: Drive view/download links and YouTube watch/
+    # embed links all follow from the ids.
+    vthumb_url = _link(drive.get("video_thumbnail.webp")) or _link(drive.get("video_thumbnail.jpg"))
+    gif_url = _gif_link(drive.get("video_thumbnail.gif"))
+    slide_pages = _slide_pages(drive)
+    for fname, (key, rtype) in FILE_RESOURCES.items():
+        # Audio and video files are hosted on YouTube, never on Drive
+        info = None if rtype in ("audio", "video") else drive.get(fname)
+        yt = youtube.get(YOUTUBE_ALIASES.get(fname, fname))
+        if not (info or yt):
+            continue
+        # `url` is what the app embeds: YouTube embed player for audio/video, Drive preview otherwise
+        url = yt.get("embed_url") if yt else (info.get("preview_url") if info else None)
+        item = {"key": key, "type": rtype, "url": url}
+        if info:
+            item["drive_id"] = info.get("id")
+        if yt:
+            item["youtube_id"] = yt.get("id")
+            if rtype == "video":
+                item["thumbnail_url"] = f"https://i.ytimg.com/vi/{yt.get('id')}/hqdefault.jpg"
+        elif rtype == "video" and vthumb_url:
+            item["thumbnail_url"] = vthumb_url
+        if rtype == "video" and gif_url:
+            item["thumbnail_animation_url"] = gif_url
+        preview = _link(drive.get(ITEM_PREVIEWS.get(key, "")))
+        if preview:
+            item["thumbnail_url"] = preview
+        if key == "slides" and slide_pages:
+            item["thumbnail_urls"] = slide_pages
+        items.append(item)
+    return items
 
 
 def _upsert_insert_only(coll: Any, key: dict[str, Any], fields: dict[str, Any]) -> Any:
@@ -227,29 +294,7 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         raise ValueError(f"can't read class/chapter number from {row['class']!r} / {row['chapter']!r}")
     book_name = (row.get("book") or row.get("book_name") or row["subject"]).strip()
 
-    # Only what can't be derived: Drive view/download links and YouTube watch/
-    # embed links all follow from the ids.
-    items = []
-    vthumb_info = drive.get("video_thumbnail.jpg")
-    vthumb_url = (vthumb_info.get("preview_url") or vthumb_info.get("view_url") if vthumb_info else "")
-    for fname, (key, rtype) in FILE_RESOURCES.items():
-        # Audio and video files are hosted on YouTube, never on Drive
-        info = None if rtype in ("audio", "video") else drive.get(fname)
-        yt = youtube.get(YOUTUBE_ALIASES.get(fname, fname))
-        if not (info or yt):
-            continue
-        # `url` is what the app embeds: YouTube embed player for audio/video, Drive preview otherwise
-        url = yt.get("embed_url") if yt else (info.get("preview_url") if info else None)
-        item = {"key": key, "type": rtype, "url": url}
-        if info:
-            item["drive_id"] = info.get("id")
-        if yt:
-            item["youtube_id"] = yt.get("id")
-            if rtype == "video":
-                item["thumbnail_url"] = f"https://i.ytimg.com/vi/{yt.get('id')}/hqdefault.jpg"
-        elif rtype == "video" and vthumb_url:
-            item["thumbnail_url"] = vthumb_url
-        items.append(item)
+    items = build_items(drive, youtube)
 
     summary = {"title": title, "book_name": book_name, "quiz": len(quiz), "flashcards": len(cards),
                "mind_map_nodes": n_nodes, "resources": [i["key"] for i in items]}
@@ -270,9 +315,8 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         {"_id": book_id},
         {"$set": {"book_name": book_name, "updated_at": now}}
     )
-    book_thumb_url = (drive.get("thumbnail.jpg", {}).get("preview_url")
-                      or drive.get("thumbnail.jpg", {}).get("view_url")
-                      or row.get("thumbnail_url") or "").strip()
+    book_thumb_url = (_link(drive.get("book_thumbnail.webp")) or _link(drive.get("thumbnail.jpg"))
+                      or (row.get("thumbnail_url") or "").strip())
     if book_thumb_url:
         db[C["book"]].update_one(
             {"_id": book_id},
@@ -281,10 +325,9 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         )
 
     # Chapter thumbnail: strictly extracted first page of chapter PDF (never book cover)
-    ch_thumb_entry = drive.get("chapter_thumbnail.png") or drive.get("chapter_thumbnail.jpg") or {}
-    chapter_thumb_url = (ch_thumb_entry.get("preview_url")
-                         or ch_thumb_entry.get("view_url")
-                         or "").strip()
+    chapter_thumb_url = (_link(drive.get("chapter_thumbnail.webp"))
+                         or _link(drive.get("chapter_thumbnail.png"))
+                         or _link(drive.get("chapter_thumbnail.jpg")))
 
     chapter_id = _upsert_insert_only(db[C["chapter"]],
                                      {"book_id": book_id, "chapter_number": chapter_no},
@@ -321,9 +364,13 @@ def sync_chapter(db: Any, row: dict[str, str], cdir: Path, dry_run: bool = False
         db[C["flashcard"]].delete_many({"chapter_id": chapter_id,
                                         "front": {"$nin": [c["front"] for c in cards]}})
     if root:
+        mind_fields = {"title": title, "root": root, "updated_at": now}
+        mind_thumb_url = _link(drive.get("mindmap_thumbnail.webp"))
+        if mind_thumb_url:
+            mind_fields["thumbnail_url"] = mind_thumb_url
         db[C["mindmap"]].update_one(
             {"chapter_id": chapter_id},
-            {"$set": {"title": title, "root": root, "updated_at": now},
+            {"$set": mind_fields,
              "$setOnInsert": {"created_at": now}},
             upsert=True)
     # Schema 3 wrote one document per file / deck; drop those.

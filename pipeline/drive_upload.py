@@ -50,6 +50,8 @@ CHUNK = 8 * 1024 * 1024  # resumable-upload chunk size
 
 mimetypes.add_type("audio/mp4", ".m4a")
 mimetypes.add_type("text/markdown", ".md")
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("image/gif", ".gif")
 
 AUDIO_EXTS: set[str] = {".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".wma", ".opus"}
 VIDEO_EXTS: set[str] = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v", ".3gp"}

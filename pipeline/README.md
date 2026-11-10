@@ -308,6 +308,45 @@ for MongoDB, rotate the database user's password in Atlas.
 
 ## Usage
 
+### Migrate existing thumbnails to WebP
+
+To inspect existing Drive and MongoDB records, run this from the repository root:
+
+```bash
+python pipeline/migrate_old_thumbnails.py
+```
+
+To migrate those records, run `python pipeline/migrate_old_thumbnails.py --apply`.
+Add `--slides-only` to process only slide decks.
+Add `--mindmap-only` to create one WebP preview from each existing mind map.
+To create animated video previews too, put each original video at
+`<video-root>/<chapter-id>/cinematic_video.mp4` and add `--video-root <video-root>`
+to the command. This needs `ffmpeg`. Videos hosted only on YouTube need a local
+original first. The video GIF samples short scenes across the video in chronological order; a still thumbnail
+remains available as a fallback.
+Use `--video-only --chapter-id <chapter-id>` to update a single chapter's video
+preview without updating its other materials.
+The migration retains the original files and skips chapters whose source files
+are not shared with anyone who has the link. It requires the Drive and MongoDB
+credentials described above. Normal pipeline commands do not run the migration.
+
+Slides get a preview for every page. The chapter, book, video, infographic and
+podcast get one preview each when their source is available. Podcast artwork
+uses the chapter cover. Previews are resized to at most 800 pixels wide, then
+encoded with lossless WebP; resizing reduces resolution, and lossless WebP is not
+guaranteed to be smaller than every original. The full infographic stays available
+as the original image. If a preview cannot be created, check the warning and run
+the script again after fixing its source or installing `pipeline/requirements.txt`.
+
+New chapters get the same previews from the normal pipeline: before each Drive
+upload (`generate`, `download`, `drive`, `upload`), `run.py` builds the WebP
+previews, a mind-map preview from `mind_map.json` and, when `ffmpeg` is
+installed, a GIF from `cinematic_video.mp4`. They are uploaded to Drive with the
+chapter's other files, and the MongoDB sync saves their links, so a normal sync
+keeps the preview fields instead of replacing them. Unchanged sources are not
+rebuilt. The migration is only needed for chapters whose files are not in the
+local `output/` folder.
+
 ```bash
 cd pipeline
 

@@ -79,7 +79,10 @@ except ModuleNotFoundError as _err:
 
 import audio_video
 import drive_upload
+import mindmap_thumbnail
 import mongo_sync
+import thumbnails
+import video_preview
 import youtube_upload
 
 from notebooklm import (
@@ -178,7 +181,7 @@ FORMAT_EXT = {"json": "json", "html": "html", "markdown": "md", "pdf": "pdf", "p
 # infographics). JSON files, audio, and video files are excluded from Drive uploads
 # (videos/audio go to YouTube; JSON quiz/flashcards/mind maps are saved to MongoDB).
 # Set DRIVE_EXTS to a set of extensions to upload only those; None = all allowed.
-DRIVE_EXTS: set[str] | None = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+DRIVE_EXTS: set[str] | None = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DRIVE_MANIFEST = "drive.json"
 
 # File extensions strictly forbidden from Drive uploads
@@ -1953,8 +1956,44 @@ class MongoSync:
 MONGO = MongoSync(enabled=False)
 
 
+def _stale(target: Path, source: Path) -> bool:
+    return not target.is_file() or target.stat().st_mtime < source.stat().st_mtime
+
+
+def make_previews(cdir: Path) -> list[Path]:
+    """Build the app's preview images for one chapter folder. Never raises.
+
+    WebP previews (chapter, book, slides pages, infographic, video still,
+    podcast), a WebP mind-map picture and an animated video GIF. Unchanged
+    sources are skipped, so this is cheap to call on every sync.
+    """
+    if not cdir.is_dir():
+        return []
+    made: list[Path] = []
+    try:
+        made += thumbnails.generate(cdir)
+    except Exception as e:  # noqa: BLE001 — previews are optional
+        log.warning("[%s] WebP previews failed: %s", cdir.name, e)
+    mind, mind_out = cdir / "mind_map.json", cdir / "mindmap_thumbnail.webp"
+    if mind.is_file() and _stale(mind_out, mind):
+        try:
+            raw = json.loads(mind.read_text(encoding="utf-8"))
+            made.append(mindmap_thumbnail.render(raw.get("root") or raw, mind_out))
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] mind-map preview failed: %s", cdir.name, e)
+    video, gif = cdir / "cinematic_video.mp4", cdir / "video_thumbnail.gif"
+    if video.is_file() and video.stat().st_size > 0 and _stale(gif, video):
+        try:
+            made.append(video_preview.create_preview(video, gif))
+            log.info("[%s] 🎞 animated video preview → %s", cdir.name, gif.name)
+        except Exception as e:  # noqa: BLE001 — needs ffmpeg
+            log.warning("[%s] video GIF preview failed: %s", cdir.name, e)
+    return made
+
+
 async def sync_backends(row: dict[str, str], key: str) -> None:
-    """After local files change: Drive, YouTube, then MongoDB (it saves their links)."""
+    """After local files change: previews, Drive, YouTube, then MongoDB (it saves their links)."""
+    await asyncio.to_thread(make_previews, chapter_dir(row))
     await DRIVE.sync_chapter(row, key)
     await YOUTUBE.sync_chapter(row, key)
     await MONGO.sync_chapter(row, key)
@@ -2415,6 +2454,7 @@ async def cmd_drive(_: argparse.Namespace) -> None:
     pending: list[Path] = []
     for row in store.rows.values():
         cdir = chapter_dir(row)
+        await asyncio.to_thread(make_previews, cdir)
         manifest = load_drive_manifest(cdir)
         pending += [f for f in drive_files(cdir) if not _in_sync(manifest.get(f.name), f)]
     if not pending:
@@ -2537,7 +2577,8 @@ def cmd_sync(_: argparse.Namespace) -> None:
                 if res.modified_count > 0:
                     updated_books += res.modified_count
                 if chapter_no is not None:
-                    ch_entry = drive_manifest.get("chapter_thumbnail.png") or drive_manifest.get("chapter_thumbnail.jpg") or {}
+                    ch_entry = (drive_manifest.get("chapter_thumbnail.webp") or drive_manifest.get("chapter_thumbnail.png")
+                                or drive_manifest.get("chapter_thumbnail.jpg") or {})
                     ch_thumb = (ch_entry.get("preview_url")
                                 or ch_entry.get("view_url")
                                 or "").strip()
